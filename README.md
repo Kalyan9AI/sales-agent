@@ -14,7 +14,7 @@ A sophisticated AI-powered voice agent for hotel food supply sales calls.
 🔧 Publish profile updated - Deployment in progress
 
 ## Live URL
-https://sales-agent-c3f5ecvedefcafc.canadacentral-01.azurewebsites.net
+https://sales-agent-c3f5ecevdefjcafc.canadacentral-01.azurewebsites.net
 
 ## Last Updated
 January 27, 2025 - Publish profile secret updated
