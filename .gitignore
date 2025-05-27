@@ -109,4 +109,6 @@ Thumbs.db
 # Backup files
 *_Backup_*
 Voice_Agent_Backup_*
-backup_summary.txt 
+backup_summary.txt node_modules/
+client/node_modules/
+*.node
