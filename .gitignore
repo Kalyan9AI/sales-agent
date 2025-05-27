@@ -112,3 +112,5 @@ Voice_Agent_Backup_*
 backup_summary.txt node_modules/
 client/node_modules/
 *.node
+*.wav
+web.config
