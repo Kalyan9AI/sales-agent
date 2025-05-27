@@ -12,6 +12,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -19,24 +20,51 @@ jobs:
       - name: Set up Node.js version
         uses: actions/setup-node@v3
         with:
-          node-version: '20.x'
+          node-version: '18.x'
+          cache: 'npm'
 
-      - name: npm install and build
+      - name: Clear npm cache
+        run: npm cache clean --force
+
+      - name: Check environment
         run: |
-          npm install
-          cd client && npm install && npm run build
+          echo "Node.js version: $(node --version)"
+          echo "npm version: $(npm --version)"
+          echo "Available memory: $(free -h)"
+          echo "CPU cores: $(nproc)"
+
+      - name: Install dependencies
+        run: |
+          npm install --no-audit
+          cd client && npm install --no-audit
+
+      - name: Build React app
+        run: |
+          cd client
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          npm run build
         env:
           CI: false
           DISABLE_ESLINT_PLUGIN: true
+          GENERATE_SOURCEMAP: false
 
       - name: Verify build
         run: |
+          echo "=== Checking build directory ==="
+          pwd
+          ls -la
+          echo "=== Checking client directory ==="
           ls -la client/
+          echo "=== Checking for build directory ==="
           if [ -d "client/build" ]; then
-            echo "Build directory found"
+            echo "✅ Build directory found"
             ls -la client/build/
+            echo "=== Build files count ==="
+            find client/build -type f | wc -l
           else
-            echo "Build directory not found - build failed"
+            echo "❌ Build directory not found - build failed"
+            echo "=== Available directories in client/ ==="
+            find client/ -type d -maxdepth 2
             exit 1
           fi
 
