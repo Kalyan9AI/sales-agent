@@ -223,3 +223,4 @@ For support or questions:
 ---
 
 **Note**: This application makes real phone calls and uses paid APIs (Twilio and OpenAI). Monitor your usage to avoid unexpected charges. # Trigger deployment with startup command
+# Force redeploy with all files
