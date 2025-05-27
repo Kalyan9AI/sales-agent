@@ -20,21 +20,39 @@ const io = socketIo(server, {
           process.env.CLIENT_URL,
           `https://${process.env.AZURE_WEBAPP_NAME}.canadacentral-01.azurewebsites.net`,
           // Allow any Azure subdomain for flexibility
-          /^https:\/\/.*\.azurewebsites\.net$/
+          /^https:\/\/.*\.azurewebsites\.net$/,
+          // Allow any https domain for testing
+          /^https:\/\/.*/
         ].filter(Boolean)
       : [
           process.env.CLIENT_URL,
-      "http://localhost:3001", 
-      "http://localhost:3002", 
+          "http://localhost:3001", 
+          "http://localhost:3002", 
           "http://localhost:3003"
         ].filter(Boolean),
     methods: ["GET", "POST"],
-    allowEIO3: true
+    allowEIO3: true,
+    credentials: true // Enable CORS credentials
   }
 });
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production'
+    ? [
+        process.env.CLIENT_URL,
+        `https://${process.env.AZURE_WEBAPP_NAME}.canadacentral-01.azurewebsites.net`,
+        /^https:\/\/.*\.azurewebsites\.net$/,
+        /^https:\/\/.*/
+      ].filter(Boolean)
+    : [
+        process.env.CLIENT_URL,
+        "http://localhost:3001",
+        "http://localhost:3002",
+        "http://localhost:3003"
+      ].filter(Boolean),
+  credentials: true // Enable CORS credentials
+}));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
