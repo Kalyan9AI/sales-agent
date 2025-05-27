@@ -1,0 +1,4 @@
+[config]
+SCM_BUILD_ARGS=--include-dev-dependencies
+PROJECT=.
+SCM_DO_BUILD_DURING_DEPLOYMENT=true 

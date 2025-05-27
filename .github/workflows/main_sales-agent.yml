@@ -21,13 +21,6 @@ jobs:
         with:
           node-version: '18.x'
 
-      - name: npm install and build
-        run: |
-          npm install
-          npm run build
-        env:
-          CI: false
-
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         with:

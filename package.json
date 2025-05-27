@@ -10,6 +10,7 @@
     "client": "cd client && npm start",
     "build": "cd client && npm install && npm run build && cd .. && mkdir -p public && cp -r client/build/* public/",
     "install-all": "npm install && cd client && npm install",
+    "postinstall": "cd client && npm install",
     "test-azure": "node test-azure.js",
     "test-azure-simple": "node test-azure-simple.js"
   },
@@ -27,6 +28,10 @@
   "devDependencies": {
     "concurrently": "^8.2.2",
     "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": "18.x",
+    "npm": "9.x"
   },
   "keywords": [
     "voice-agent",
