@@ -14,13 +14,21 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: [
-      "http://localhost:3001", 
-      "http://localhost:3002", 
-      "http://localhost:3003",
-      process.env.CLIENT_URL
-    ].filter(Boolean), // Remove any undefined values
-    methods: ["GET", "POST"]
+    origin: process.env.NODE_ENV === 'production' 
+      ? [
+          process.env.CLIENT_URL,
+          `https://${process.env.AZURE_WEBAPP_NAME}.azurewebsites.net`,
+          // Allow any Azure subdomain for flexibility
+          /^https:\/\/.*\.azurewebsites\.net$/
+        ].filter(Boolean)
+      : [
+          process.env.CLIENT_URL,
+          "http://localhost:3001", 
+          "http://localhost:3002", 
+          "http://localhost:3003"
+        ].filter(Boolean),
+    methods: ["GET", "POST"],
+    allowEIO3: true
   }
 });
 
@@ -334,9 +342,15 @@ app.post('/api/make-call', async (req, res) => {
     if (process.env.NODE_ENV === 'production') {
       // Production: Use Azure App Service URL
       webhookUrl = process.env.CLIENT_URL || `https://${process.env.AZURE_WEBAPP_NAME}.azurewebsites.net`;
+      if (!webhookUrl) {
+        throw new Error('Production environment requires CLIENT_URL or AZURE_WEBAPP_NAME to be set');
+      }
     } else {
       // Development: Use ngrok URL
-      webhookUrl = process.env.NGROK_URL || 'https://a27c-2601-242-4100-2bf0-6dc0-9153-211e-40e6.ngrok-free.app';
+      webhookUrl = process.env.NGROK_URL;
+      if (!webhookUrl) {
+        throw new Error('Development environment requires NGROK_URL to be set');
+      }
     }
     console.log(`🔗 Using webhook URL: ${webhookUrl}`);
 

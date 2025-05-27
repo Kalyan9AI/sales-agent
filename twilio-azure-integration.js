@@ -45,10 +45,16 @@ class TwilioAzureIntegration {
       let baseUrl;
       if (process.env.NODE_ENV === 'production') {
         // Production: Use Azure App Service URL
-        baseUrl = process.env.CLIENT_URL || `https://${process.env.AZURE_WEBAPP_NAME}.azurewebsites.net` || 'https://sales-agent-c3f5ecevdefjcafc.canadacentral-01.azurewebsites.net';
+        baseUrl = process.env.CLIENT_URL || `https://${process.env.AZURE_WEBAPP_NAME}.azurewebsites.net`;
+        if (!baseUrl) {
+          throw new Error('Production environment requires CLIENT_URL or AZURE_WEBAPP_NAME to be set');
+        }
       } else {
         // Development: Use ngrok URL
-        baseUrl = process.env.NGROK_URL || 'https://134e-2601-242-4100-2bf0-fd01-2cce-8a19-dbe8.ngrok-free.app';
+        baseUrl = process.env.NGROK_URL;
+        if (!baseUrl) {
+          throw new Error('Development environment requires NGROK_URL to be set');
+        }
       }
       const fullAudioUrl = `${baseUrl}/audio/${audioFileName}`;
       
