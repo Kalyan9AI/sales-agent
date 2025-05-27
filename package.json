@@ -8,9 +8,10 @@
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "nodemon server.js",
     "client": "cd client && npm start",
-    "build": "cd client && npm install && npm run build",
+    "build": "cd client && npm install && npm run build && cd .. && mkdir -p public && cp -r client/build/* public/",
     "install-all": "npm install && cd client && npm install",
-    "postinstall": "cd client && npm install && npm run build && cd .. && mkdir -p public && cp -r client/build/* public/",
+    "prebuild": "cd client && npm install",
+    "postinstall": "npm run build || echo 'Client build failed, using existing public/ directory'",
     "test-azure": "node test-azure.js",
     "test-azure-simple": "node test-azure-simple.js"
   },

@@ -122,3 +122,7 @@ conversation_history/
 # Package lock files (let Azure generate its own)
 package-lock.json
 client/package-lock.json
+
+# SOLUTION: Exclude client source to prevent platform detection confusion
+# Only deploy the built React app (public/) not the source (client/)
+client/
