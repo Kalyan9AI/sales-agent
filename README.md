@@ -212,6 +212,12 @@ For support or questions:
 2. Review Twilio and OpenAI documentation
 3. Create an issue in the repository
 
+## Deployment Status
+🚀 Ready for Azure deployment - Environment variables configured
+
+## Live URL
+https://sales-agent-c3f5ecvedefcafc.canadacentral-01.azurewebsites.net
+
 ---
 
 **Note**: This application makes real phone calls and uses paid APIs (Twilio and OpenAI). Monitor your usage to avoid unexpected charges. 
