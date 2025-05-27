@@ -31,6 +31,8 @@ jobs:
 
       - name: Build React client
         run: npm run build
+        env:
+          CI: false
 
       - name: Copy client build to server public directory
         run: |
