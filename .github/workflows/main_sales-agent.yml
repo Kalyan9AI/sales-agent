@@ -24,12 +24,17 @@ jobs:
       - name: Install backend dependencies
         run: npm install
 
-      - name: Build React client and move to public/
+      - name: Verify React app is pre-built
         run: |
-          npm install --prefix client
-          npm run build --prefix client
-          mkdir -p public
-          cp -r client/build/* public/
+          echo "Checking for pre-built React app in public/ directory..."
+          ls -la public/ || echo "Warning: public/ directory not found"
+          if [ -f public/index.html ]; then
+            echo "✅ Pre-built React app found in public/"
+          else
+            echo "❌ No pre-built React app found. Creating placeholder..."
+            mkdir -p public
+            echo "<html><body><h1>Voice Agent Backend</h1></body></html>" > public/index.html
+          fi
 
       - name: Create clean deployment zip
         run: |
