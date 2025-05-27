@@ -28,3 +28,8 @@ jobs:
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_196A6E3A57CD4DDC9C3CFD845C233AA0 }}
           package: .
+        env:
+          WEBSITE_NODE_DEFAULT_VERSION: '18.17.0'
+          SCM_DO_BUILD_DURING_DEPLOYMENT: 'true'
+          ENABLE_ORYX_BUILD: 'true'
+          ORYX_PLATFORM: 'nodejs'

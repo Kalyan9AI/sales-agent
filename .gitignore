@@ -114,3 +114,11 @@ client/node_modules/
 *.node
 *.wav
 web.config
+
+# Temporary audio files and conversation history
+temp_audio/
+conversation_history/
+
+# Package lock files (let Azure generate its own)
+package-lock.json
+client/package-lock.json

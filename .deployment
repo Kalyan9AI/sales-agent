@@ -1,4 +1,5 @@
 [config]
-SCM_BUILD_ARGS=--include-dev-dependencies
+SCM_BUILD_ARGS=--platform nodejs --platform-version 18
 PROJECT=.
-SCM_DO_BUILD_DURING_DEPLOYMENT=true 
+SCM_DO_BUILD_DURING_DEPLOYMENT=true
+WEBSITE_NODE_DEFAULT_VERSION=18.17.0 
