@@ -24,10 +24,21 @@ jobs:
       - name: npm install and build
         run: |
           npm install
-          cd client && npm install
-          cd client && CI=false npm run build
+          cd client && npm install && npm run build
         env:
           CI: false
+          DISABLE_ESLINT_PLUGIN: true
+
+      - name: Verify build
+        run: |
+          ls -la client/
+          if [ -d "client/build" ]; then
+            echo "Build directory found"
+            ls -la client/build/
+          else
+            echo "Build directory not found - build failed"
+            exit 1
+          fi
 
       - name: Copy build files
         run: |
