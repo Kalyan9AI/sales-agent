@@ -36,9 +36,9 @@ jobs:
             echo "<html><body><h1>Voice Agent Backend</h1></body></html>" > public/index.html
           fi
 
-      - name: Create clean deployment zip
+      - name: Create self-contained deployment zip
         run: |
-          zip -r deploy.zip . -x "client/*" ".git/*" "node_modules/*" "*.log" "temp_audio/*" "conversation_history/*"
+          zip -r deploy.zip . -x "client/*" ".git/*" "*.log" "temp_audio/*" "conversation_history/*"
 
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
@@ -49,6 +49,4 @@ jobs:
           package: deploy.zip
         env:
           WEBSITE_NODE_DEFAULT_VERSION: '18.17.0'
-          SCM_DO_BUILD_DURING_DEPLOYMENT: 'true'
-          ENABLE_ORYX_BUILD: 'true'
-          ORYX_PLATFORM: 'nodejs'
+        
