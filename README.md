@@ -1,15 +1,23 @@
-# Hotel Breakfast Supplies Voice Agent
+# Voice Agent - Sales Assistant
 
-A real-time AI-powered voice agent application for hotel breakfast supply sales calls. The system uses Twilio for voice calls, OpenAI for intelligent conversation handling, and React for a modern real-time UI.
+A sophisticated AI-powered voice agent for hotel food supply sales calls.
 
 ## Features
+- Real-time voice conversations with AI
+- Azure Speech Services integration
+- Twilio phone system integration
+- Conversation history and analysis
+- Order processing workflow
 
-- 🤖 **AI-Powered Conversations**: Natural, context-aware sales conversations with hotel managers
-- 📞 **Real-time Voice Calls**: Powered by Twilio Voice API
-- 🎯 **Hotel Breakfast Focus**: Specialized context for selling breakfast supplies to hotels
-- 💬 **Live Conversation View**: Real-time transcript of ongoing calls
-- 🎨 **Modern UI**: Beautiful, responsive interface with real-time updates
-- 🔄 **Socket.io Integration**: Live updates for call status and conversation flow
+## Deployment Status
+🚀 Ready for Azure deployment - Environment variables configured
+🔧 Publish profile updated - Deployment in progress
+
+## Live URL
+https://sales-agent-c3f5ecvedefcafc.canadacentral-01.azurewebsites.net
+
+## Last Updated
+January 27, 2025 - Publish profile secret updated
 
 ## Technology Stack
 
@@ -211,12 +219,6 @@ For support or questions:
 1. Check the troubleshooting section
 2. Review Twilio and OpenAI documentation
 3. Create an issue in the repository
-
-## Deployment Status
-🚀 Ready for Azure deployment - Environment variables configured
-
-## Live URL
-https://sales-agent-c3f5ecvedefcafc.canadacentral-01.azurewebsites.net
 
 ---
 
