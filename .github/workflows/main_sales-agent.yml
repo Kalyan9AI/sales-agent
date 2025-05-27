@@ -47,6 +47,4 @@ jobs:
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_196A6E3A57CD4DDC9C3CFD845C233AA0 }}
           package: deploy.zip
-        env:
-          WEBSITE_NODE_DEFAULT_VERSION: '18.17.0'
         
