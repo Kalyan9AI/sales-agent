@@ -1,3 +1,4 @@
+// Deployment trigger - Updated with new environment configuration
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -17,14 +18,14 @@ const io = socketIo(server, {
     origin: process.env.NODE_ENV === 'production' 
       ? [
           process.env.CLIENT_URL,
-          `https://${process.env.AZURE_WEBAPP_NAME}.azurewebsites.net`,
+          `https://${process.env.AZURE_WEBAPP_NAME}.canadacentral-01.azurewebsites.net`,
           // Allow any Azure subdomain for flexibility
           /^https:\/\/.*\.azurewebsites\.net$/
         ].filter(Boolean)
       : [
           process.env.CLIENT_URL,
-          "http://localhost:3001", 
-          "http://localhost:3002", 
+      "http://localhost:3001", 
+      "http://localhost:3002", 
           "http://localhost:3003"
         ].filter(Boolean),
     methods: ["GET", "POST"],
@@ -341,7 +342,7 @@ app.post('/api/make-call', async (req, res) => {
     let webhookUrl;
     if (process.env.NODE_ENV === 'production') {
       // Production: Use Azure App Service URL
-      webhookUrl = process.env.CLIENT_URL || `https://${process.env.AZURE_WEBAPP_NAME}.azurewebsites.net`;
+      webhookUrl = process.env.CLIENT_URL || `https://${process.env.AZURE_WEBAPP_NAME}.canadacentral-01.azurewebsites.net`;
       if (!webhookUrl) {
         throw new Error('Production environment requires CLIENT_URL or AZURE_WEBAPP_NAME to be set');
       }

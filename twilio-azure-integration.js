@@ -45,7 +45,7 @@ class TwilioAzureIntegration {
       let baseUrl;
       if (process.env.NODE_ENV === 'production') {
         // Production: Use Azure App Service URL
-        baseUrl = process.env.CLIENT_URL || `https://${process.env.AZURE_WEBAPP_NAME}.azurewebsites.net`;
+        baseUrl = process.env.CLIENT_URL || `https://${process.env.AZURE_WEBAPP_NAME}.canadacentral-01.azurewebsites.net`;
         if (!baseUrl) {
           throw new Error('Production environment requires CLIENT_URL or AZURE_WEBAPP_NAME to be set');
         }
