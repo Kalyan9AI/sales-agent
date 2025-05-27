@@ -41,9 +41,16 @@ class TwilioAzureIntegration {
       
       console.log(`💾 AZURE TTS: Audio file saved to ${audioPath}`);
       
-      // Get the ngrok URL from environment or use default
-      const ngrokUrl = process.env.NGROK_URL || 'https://a27c-2601-242-4100-2bf0-6dc0-9153-211e-40e6.ngrok-free.app';
-      const fullAudioUrl = `${ngrokUrl}/audio/${audioFileName}`;
+      // Get the webhook URL based on environment
+      let baseUrl;
+      if (process.env.NODE_ENV === 'production') {
+        // Production: Use Azure App Service URL
+        baseUrl = process.env.CLIENT_URL || `https://${process.env.AZURE_WEBAPP_NAME}.azurewebsites.net` || 'https://sales-agent-c3f5ecevdefjcafc.canadacentral-01.azurewebsites.net';
+      } else {
+        // Development: Use ngrok URL
+        baseUrl = process.env.NGROK_URL || 'https://134e-2601-242-4100-2bf0-fd01-2cce-8a19-dbe8.ngrok-free.app';
+      }
+      const fullAudioUrl = `${baseUrl}/audio/${audioFileName}`;
       
       // Play the generated audio with full URL
       twiml.play(fullAudioUrl);
