@@ -1,0 +1,80 @@
+================================================================================
+VOICE AGENT CALL HISTORY
+================================================================================
+Call ID: call_demo_sample
+Date: 5/26/2024, 7:07:30 PM
+Duration: 3:45
+Phone Number: +19253252609
+Hotel: Grand Plaza Hotel
+Manager: John Doe
+Status: completed
+================================================================================
+CONVERSATION TRANSCRIPT
+================================================================================
+
+🤖 AI AGENT (Sarah) [7:04:15 PM]
+Hi, I am Sarah calling from US Hotel Food Supplies, customer sales department. Can I know if I am speaking with the manager John Doe?
+
+👤 CUSTOMER [7:04:18 PM]
+Yes, this is John.
+
+🤖 AI AGENT (Sarah) [7:04:20 PM]
+Great! It seems like your restocking order has neared and I'm calling to remind you about reordering. Based on your last order of Asiago Cheese Bagels, I'd recommend our Blueberry Bagels. How many cases would you like? Our minimum is 2 cases at $25 per case.
+
+👤 CUSTOMER [7:04:25 PM]
+I'll take 4 cases of the blueberry bagels.
+
+🤖 AI AGENT (Sarah) [7:04:27 PM]
+Perfect! I'll add 4 cases of Blueberry Bagels at $25 per case to your order. Is there anything else you need for your breakfast service?
+
+👤 CUSTOMER [7:04:32 PM]
+Do you have any coffee options?
+
+🤖 AI AGENT (Sarah) [7:04:34 PM]
+Absolutely! We have premium ground coffee. How many cases would you like? Our minimum is 2 cases at $28 per case, or 4+ cases at $26 per case.
+
+👤 CUSTOMER [7:04:38 PM]
+I'll take 3 cases of coffee.
+
+🤖 AI AGENT (Sarah) [7:04:40 PM]
+Excellent! I'll add 3 cases of premium ground coffee at $28 per case to your order. Anything else I can help you with today?
+
+👤 CUSTOMER [7:04:45 PM]
+That's all for now.
+
+🤖 AI AGENT (Sarah) [7:04:47 PM]
+Wonderful! Your order has been processed. Thank you for your time and have a great day!
+
+================================================================================
+CALL ANALYSIS
+================================================================================
+Summary: Successful order placement for breakfast supplies including bagels and coffee
+Customer Sentiment: positive
+Satisfaction Score: 9/10
+
+ORDER DETAILS:
+----------------------------------------
+1. Premium Blueberry Bagels
+   Quantity: 4 cases
+   Unit Price: $25
+   Total: $100
+
+2. Premium Ground Coffee
+   Quantity: 3 cases
+   Unit Price: $28
+   Total: $84
+
+Subtotal: $184
+Tax: $15.64
+TOTAL: $199.64
+
+NEXT STEPS:
+----------------------------------------
+1. Process order through SAP system
+2. Schedule delivery within 2-3 business days
+3. Send order confirmation email
+4. Follow up after delivery
+
+================================================================================
+END OF CALL HISTORY
+================================================================================ 

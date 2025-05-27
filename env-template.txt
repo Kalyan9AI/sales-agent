@@ -1,0 +1,22 @@
+# Copy this content to a .env file in the root directory
+
+# Twilio Credentials
+TWILIO_ACCOUNT_SID=your_twilio_account_sid_here
+TWILIO_AUTH_TOKEN=your_twilio_auth_token_here
+TWILIO_PHONE_NUMBER=your_twilio_phone_number_here
+
+# OpenAI API Key
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Azure Speech Services
+AZURE_SPEECH_KEY=your_azure_speech_key_here
+AZURE_SPEECH_REGION=your_azure_speech_region_here
+AZURE_CUSTOM_VOICE_NAME=luna
+
+# Server Configuration
+PORT=3001
+CLIENT_URL=http://localhost:3000
+
+# Your company details for context
+COMPANY_NAME=Hotel Breakfast Supplies Co.
+AGENT_NAME=Sarah 
