@@ -25,7 +25,7 @@ jobs:
         run: |
           npm install
           cd client && npm install
-          cd .. && npm run build
+          cd client && CI=false npm run build
         env:
           CI: false
 
