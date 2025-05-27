@@ -21,13 +21,27 @@ jobs:
         with:
           node-version: '18.x'
 
+      - name: Install backend dependencies
+        run: npm install
+
+      - name: Build React client and move to public/
+        run: |
+          npm install --prefix client
+          npm run build --prefix client
+          mkdir -p public
+          cp -r client/build/* public/
+
+      - name: Create clean deployment zip
+        run: |
+          zip -r deploy.zip . -x "client/*" ".git/*" "node_modules/*" "*.log" "temp_audio/*" "conversation_history/*"
+
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'sales-agent'
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_196A6E3A57CD4DDC9C3CFD845C233AA0 }}
-          package: .
+          package: deploy.zip
         env:
           WEBSITE_NODE_DEFAULT_VERSION: '18.17.0'
           SCM_DO_BUILD_DURING_DEPLOYMENT: 'true'
