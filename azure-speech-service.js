@@ -18,8 +18,15 @@ class AzureSpeechService {
     // Set optimal audio format for Luna voice (Audio16Khz32KBitRateMonoMp3)
     this.speechConfig.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3;
     
+    // Configure timeouts and retries
+    this.speechConfig.setProperty("SpeechServiceConnection_InitialSilenceTimeoutMs", "10000"); // 10 seconds
+    this.speechConfig.setProperty("SpeechServiceConnection_EndSilenceTimeoutMs", "5000"); // 5 seconds
+    this.speechConfig.setProperty("SpeechServiceConnection_ReconnectionBackoffMs", "1000"); // 1 second
+    this.speechConfig.setProperty("SpeechServiceConnection_MaxRetryTimeMs", "15000"); // 15 seconds max retry
+    
     console.log(`🎙️ Azure Speech Service initialized with voice: ${this.speechConfig.speechSynthesisVoiceName}`);
     console.log(`🔊 Audio format: Audio16Khz32KBitRateMonoMp3 for optimal Luna voice quality`);
+    console.log(`⚙️ Configured timeouts: Initial=10s, End=5s, MaxRetry=15s`);
   }
 
   /**

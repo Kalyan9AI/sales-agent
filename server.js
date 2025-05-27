@@ -33,7 +33,11 @@ const io = socketIo(server, {
     methods: ["GET", "POST"],
     allowEIO3: true,
     credentials: true // Enable CORS credentials
-  }
+  },
+  pingTimeout: 30000,  // How long to wait for ping response
+  pingInterval: 10000, // How often to ping
+  upgradeTimeout: 15000, // How long to wait for upgrade
+  transports: ['websocket', 'polling']
 });
 
 // Middleware
@@ -55,6 +59,14 @@ app.use(cors({
 }));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+
+// Configure server timeouts
+app.use((req, res, next) => {
+  // Set timeout for all requests to 30 seconds
+  req.setTimeout(30000);
+  res.setTimeout(30000);
+  next();
+});
 
 // Serve static files from React build
 app.use(express.static(path.join(__dirname, 'public')));
@@ -85,6 +97,33 @@ const conversations = new Map();
 // Track timeout attempts to prevent infinite loops
 const callTimeoutAttempts = new Map();
 
+// Track session flags for each call
+const sessionFlags = new Map();
+const orderDetails = new Map(); // Add this new Map to store order details
+
+// Initialize session flags for a new call
+function initializeSessionFlags(callId) {
+  sessionFlags.set(callId, {
+    reorderConfirmed: false,
+    upsellAttempted: false,
+    customerDone: false
+  });
+  
+  // Initialize order details
+  orderDetails.set(callId, {
+    customerName: '',
+    hotelName: '',
+    products: [],
+    total: 0
+  });
+}
+
+// Clean up session flags
+function cleanupSessionFlags(callId) {
+  sessionFlags.delete(callId);
+  orderDetails.delete(callId); // Clean up order details too
+}
+
 // Create conversation history directory if it doesn't exist
 const conversationHistoryDir = path.join(__dirname, 'conversation_history');
 if (!fs.existsSync(conversationHistoryDir)) {
@@ -112,43 +151,20 @@ YOUR OBJECTIVES:
 5. Suggest minimum order quantities and provide pricing.
 6. Confirm each order item with quantity and pricing.
 7. Ask if they need anything else after each order.
-8. Recommend similar or seasonal products where relevant.
+8. Recommend similar or seasonal products where relevant, but only once per conversation unless customer shows strong interest.
 9. End the call professionally when they're done.
 
-IF SOMEONE OTHER THAN MANAGER ANSWERS:
-- Say: "Thanks for picking up! May I speak with the manager, [manager name], regarding their restocking order?"
-- If they connect you → continue with the normal opening.
-- If manager is unavailable → say: "No worries! I'll call back later when the manager is available. Thanks again and have a great day!" and end the call.
-
-OPENING CONVERSATION FLOW:
-1. Initial greeting: "Hi, I'm Sarah calling from US Hotel Food Supplies, customer sales department. Can I know if I am speaking with the manager [manager name]?" – KEEP THIS SHORT, ONLY ONE QUESTION, NO OTHER QUESTIONS.
-2. Once manager confirms: "Great! Just wanted to make sure you're stocked up. Looks like your regular order of [previous product] is due. Would you like to go ahead and reorder the same?"
-
-PRODUCT SUGGESTION & REORDERING FLOW:
-1. Confirm reorder politely: "Looks like your regular order of [product] is due. Would you like to go ahead and reorder the same?"
-2. If yes → Confirm quantity: "Perfect! How many cases would you like this time? We recommend at least [min] cases at $[price] per case."
-3. If no / not sure → Respectfully explore alternatives: "No problem! We do have a few new options I think you might like."
-4. Suggest similar or seasonal product naturally:
-   - "Since you've ordered [product] before, a lot of hotels like yours are also trying our [new product]."
-   - "It's perfect for the season and has great reviews. Would you like to try a couple of cases?"
-   - NOTE: [new product] and [related product] should be programmatically selected based on order history or category affinity.
-5. ALWAYS ask for quantity after suggestion: "What quantity works best for you this time? Our minimum is [X] cases at $[price] per case."
-6. Confirm the order clearly: "Got it! I'll add [X] cases of [product] at $[price] per case."
-7. After confirming each product, consider one thoughtful upsell only if it makes sense:
-   - "Nice choice on the [confirmed product]! A lot of hotels who order that also go for [related product]. Would you like to hear more?"
-   - Only upsell once every 2–3 product confirmations to avoid repetition.
-8. Ask if they need anything else: "Is there anything else you'd like to restock for your breakfast service today?"
-9. Keep responses brief, polite, and segmented – avoid long compound sentences.
-
-CALL ENDING INSTRUCTIONS:
-- When the customer indicates they're done ordering (says "that's all", "I'm good", "nothing else", etc.)
-- ALWAYS end with one of these exact phrases to close the call:
-  * "Have a wonderful day!"
-  * "Have a great day!"
-  * "Thank you for your time and have a great day!"
-  * "Thanks for your time, have a wonderful day!"
-- These phrases will automatically end the call, so use them when the conversation is complete.
-- If customer is unresponsive or declines to talk: "Great speaking with you — I'll follow up if anything changes."
+CONVERSATION MANAGEMENT:
+1. If customer says "same as last time" and reorder hasn't been confirmed:
+   - Ask "Just to confirm — would you like to reorder [last product] again? And how many cases?"
+   - After confirmation, mark reorderConfirmed as true
+2. For upsells:
+   - Only attempt one upsell per short call unless customer shows strong engagement
+   - After first upsell attempt, mark upsellAttempted as true
+3. When customer indicates they're done:
+   - Mark customerDone as true
+   - Avoid triggering reset or additional upsells
+   - Proceed to order summary and closing
 
 IMPORTANT GUIDELINES:
 - NEVER assume quantities – ALWAYS ask "How many cases would you like?" for ANY product mention.
@@ -223,17 +239,8 @@ RESET INSTRUCTION (fail-safe):
 - If you're unsure about the current context at any time:
   * Politely ask: "Would you mind confirming which product you're looking to reorder today?" and resume the reorder flow as normal.
 
-EXPERIMENTAL TONE PROFILE (optional):
-- Set toneProfile = "friendly" → Use warmer, softer language, great for boutique and mid-scale hotels.
-- Set toneProfile = "professional" → Use efficient, to-the-point phrasing, better for business hotels and high-volume chains.
-
-OPTIONAL ENHANCEMENTS:
-- Add pricing justification when needed: "That's our current wholesale rate."
-- Mention reorder frequency: "It's been about 3 weeks since your last order."
-- Add memory safety reminder: "If you're ever unsure, feel free to ask about your past orders!"
-- If speaking with an assistant: "Would it be possible to note a good time for the manager to take a quick call?"
-
 REMEMBER: Always ask for quantities first, suggest minimums and pricing, then confirm with their specified amounts. Never assume how much they want to order. Keep the tone friendly, brief, and focused.`;
+
 
 // Function to save conversation history to text file
 function saveConversationHistory(callId, conversation, callData, analysis = null) {
@@ -241,6 +248,14 @@ function saveConversationHistory(callId, conversation, callData, analysis = null
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `call_${callId}_${timestamp}.txt`;
     const filepath = path.join(conversationHistoryDir, filename);
+    
+    // Get order details
+    const order = orderDetails.get(callId) || {
+      customerName: 'Unknown',
+      hotelName: 'Unknown',
+      products: [],
+      total: 0
+    };
     
     // Format conversation for text file
     let content = '';
@@ -250,12 +265,27 @@ function saveConversationHistory(callId, conversation, callData, analysis = null
     content += `Call ID: ${callId}\n`;
     content += `Date: ${new Date().toLocaleString()}\n`;
     content += `Duration: ${callData ? calculateCallDuration(callData.startTime) : 'Unknown'}\n`;
+    content += `Customer Name: ${order.customerName}\n`;
+    content += `Hotel Name: ${order.hotelName}\n`;
+    content += `Order Total: $${order.total.toFixed(2)}\n`;
     
     if (callData) {
       content += `Phone Number: ${callData.phoneNumber || 'Unknown'}\n`;
-      content += `Hotel: ${callData.hotel?.hotelName || 'Unknown'}\n`;
-      content += `Manager: ${callData.hotel?.managerName || 'Unknown'}\n`;
       content += `Status: ${callData.status || 'Unknown'}\n`;
+    }
+    
+    // Add order details section
+    if (order.products.length > 0) {
+      content += '\n' + '='.repeat(80) + '\n';
+      content += `ORDER DETAILS\n`;
+      content += '='.repeat(80) + '\n';
+      order.products.forEach((product, index) => {
+        content += `${index + 1}. ${product.product}\n`;
+        content += `   Quantity: ${product.quantity} cases\n`;
+        content += `   Price per case: $${product.pricePerCase}\n`;
+        content += `   Total: $${product.total}\n\n`;
+      });
+      content += `TOTAL ORDER VALUE: $${order.total.toFixed(2)}\n\n`;
     }
     
     content += '='.repeat(80) + '\n';
@@ -377,6 +407,9 @@ app.post('/api/make-call', async (req, res) => {
     // Create a unique call ID
     const callId = `call_${Date.now()}`;
     
+    // Initialize order tracking when call starts
+    initializeSessionFlags(callId);
+
     // Use custom context if provided, otherwise use default
     const systemContext = context || SYSTEM_CONTEXT;
     
@@ -1072,17 +1105,37 @@ app.post('/api/voice/status', (req, res) => {
 
       // Clean up completed calls
       if (callStatus === 'completed' || callStatus === 'failed') {
+        // Get final order details before cleanup
+        const orderInfo = orderDetails.get(callId);
+        
         // Save conversation history before cleanup
         const conversation = conversations.get(callId) || [];
-        const callData = activeCalls.get(callId);
         if (conversation.length > 0) {
-          saveConversationHistory(callId, conversation, callData);
+          saveConversationHistory(callId, conversation, {
+            ...callData,
+            orderDetails: orderInfo
+          });
         }
         
-        io.emit('callCompleted', { callId });
+        // Emit final order status
+        if (orderInfo) {
+          io.emit('orderUpdate', {
+            callId,
+            orderDetails: orderInfo,
+            final: true,
+            status: 'completed'
+          });
+        }
+        
+        io.emit('callCompleted', { 
+          callId,
+          orderInfo 
+        });
+        
         setTimeout(() => {
           activeCalls.delete(callId);
           conversations.delete(callId);
+          cleanupSessionFlags(callId);
         }, 60000); // Keep for 1 minute after completion
       }
       break;
@@ -1101,8 +1154,10 @@ app.post('/api/terminate-call', async (req, res) => {
   }
 
   try {
-    // Get call data
+    // Get call data and order details
     const callData = activeCalls.get(callId);
+    const order = orderDetails.get(callId);
+    
     if (!callData) {
       return res.status(404).json({ error: 'Call not found' });
     }
@@ -1122,21 +1177,33 @@ app.post('/api/terminate-call', async (req, res) => {
       // Continue with cleanup even if Twilio call termination fails
     }
 
-    // Save conversation history before cleanup
+    // Save conversation history with order details
     const conversation = conversations.get(callId) || [];
     if (conversation.length > 0) {
       try {
-        saveConversationHistory(callId, conversation, callData);
+        saveConversationHistory(callId, conversation, {
+          ...callData,
+          orderDetails: order
+        });
       } catch (saveError) {
         console.error('Error saving conversation history:', saveError);
-        // Continue with cleanup even if saving fails
       }
+    }
+
+    // Emit final order status
+    if (order) {
+      io.emit('orderUpdate', {
+        callId,
+        orderDetails: order,
+        final: true,
+        status: 'terminated'
+      });
     }
 
     // Clean up call data
     activeCalls.delete(callId);
     conversations.delete(callId);
-    resetTimeoutAttempts(callId);
+    cleanupSessionFlags(callId);
 
     // Emit call completed event
     io.emit('callCompleted', { 
@@ -1182,13 +1249,29 @@ app.post('/api/terminate-call', async (req, res) => {
 app.get('/api/conversation/:callId', (req, res) => {
   const callId = req.params.callId;
   const conversation = conversations.get(callId);
+  const order = orderDetails.get(callId);
   
   if (conversation) {
     // Filter out system messages for display
     const displayConversation = conversation.filter(msg => msg.role !== 'system');
-    res.json({ conversation: displayConversation });
+    res.json({ 
+      conversation: displayConversation,
+      orderDetails: order || null
+    });
   } else {
     res.status(404).json({ error: 'Conversation not found' });
+  }
+});
+
+// New endpoint to get current order details
+app.get('/api/order/:callId', (req, res) => {
+  const callId = req.params.callId;
+  const order = orderDetails.get(callId);
+  
+  if (order) {
+    res.json({ orderDetails: order });
+  } else {
+    res.status(404).json({ error: 'Order not found' });
   }
 });
 
@@ -1441,9 +1524,58 @@ async function generateAIResponse(conversation, callId, hotel) {
   try {
     console.log('🤖 Generating AI response for conversation:', conversation.slice(-3));
     
+    // Get session flags and order details
+    const flags = sessionFlags.get(callId) || initializeSessionFlags(callId);
+    const order = orderDetails.get(callId);
+    
+    // Extract customer name and hotel name from conversation if not already set
+    if (!order.customerName || !order.hotelName) {
+      const managerMatch = conversation.find(msg => 
+        msg.role === 'user' && 
+        msg.content.toLowerCase().includes('speaking with') || 
+        msg.content.toLowerCase().includes('this is')
+      );
+      
+      if (managerMatch) {
+        order.customerName = extractManagerName(managerMatch.content);
+        if (hotel?.hotelName) {
+          order.hotelName = hotel.hotelName;
+        }
+      }
+    }
+    
+    // Extract order information from the last AI response
+    const lastAIResponse = conversation.find(msg => msg.role === 'assistant')?.content;
+    if (lastAIResponse) {
+      const orderInfo = extractOrderInfo(lastAIResponse);
+      if (orderInfo) {
+        order.products.push(orderInfo);
+        order.total = calculateTotal(order.products);
+      }
+    }
+    
+    // Update order details
+    orderDetails.set(callId, order);
+    
+    // Check for conversation end indicators
+    const lastUserMessage = conversation.find(msg => msg.role === 'user')?.content.toLowerCase() || '';
+    if (lastUserMessage.includes("that's all") || lastUserMessage.includes("goodbye") || lastUserMessage.includes("thank you")) {
+      flags.customerDone = true;
+      
+      // Emit final order details
+      io.emit('orderUpdate', {
+        callId,
+        orderDetails: order,
+        final: true
+      });
+    }
+    
     // Generate normal AI response using existing system
     const messages = [
-      { role: 'system', content: SYSTEM_CONTEXT },
+      { 
+        role: 'system', 
+        content: SYSTEM_CONTEXT + `\nCURRENT SESSION STATE:\nreorderConfirmed: ${flags.reorderConfirmed}\nupsellAttempted: ${flags.upsellAttempted}\ncustomerDone: ${flags.customerDone}\norderTotal: $${order.total}`
+      },
       ...conversation.map(msg => ({
         role: msg.role === 'user' ? 'user' : 'assistant',
         content: msg.content
@@ -1459,12 +1591,67 @@ async function generateAIResponse(conversation, callId, hotel) {
 
     const aiResponse = completion.choices[0].message.content;
     
+    // Update session flags based on AI response
+    if (aiResponse.toLowerCase().includes("would you like to reorder")) {
+      flags.reorderConfirmed = true;
+    }
+    if (aiResponse.toLowerCase().includes("also") && aiResponse.toLowerCase().includes("would you like")) {
+      flags.upsellAttempted = true;
+    }
+    
+    // Save updated flags
+    sessionFlags.set(callId, flags);
+    
+    // Emit order update if there are changes
+    if (order.products.length > 0) {
+      io.emit('orderUpdate', {
+        callId,
+        orderDetails: order,
+        final: flags.customerDone
+      });
+    }
+    
     return aiResponse;
     
   } catch (error) {
     console.error('❌ Error generating AI response:', error);
     return "I apologize, but I'm having trouble processing your request right now. Could you please repeat that?";
   }
+}
+
+// Helper function to extract manager name from conversation
+function extractManagerName(content) {
+  const words = content.split(' ');
+  const nameIndex = words.findIndex(word => 
+    word.toLowerCase() === 'am' || 
+    word.toLowerCase() === 'is'
+  );
+  
+  if (nameIndex >= 0 && nameIndex < words.length - 1) {
+    return words[nameIndex + 1];
+  }
+  return '';
+}
+
+// Helper function to extract order information from AI response
+function extractOrderInfo(response) {
+  // Look for patterns like "X cases of [product] at $[price] per case"
+  const orderMatch = response.match(/(\d+)\s+cases?\s+of\s+([^$]+?)\s+at\s+\$(\d+\.?\d*)/i);
+  
+  if (orderMatch) {
+    return {
+      quantity: parseInt(orderMatch[1]),
+      product: orderMatch[2].trim(),
+      pricePerCase: parseFloat(orderMatch[3]),
+      total: parseInt(orderMatch[1]) * parseFloat(orderMatch[3])
+    };
+  }
+  return null;
+}
+
+// Helper function to calculate total order amount
+function calculateTotal(products) {
+  return products.reduce((sum, item) => sum + item.total, 0);
 }
 
 // Call analysis endpoint
@@ -1552,6 +1739,19 @@ app.post('/api/analyze-call', async (req, res) => {
       details: error.message 
     });
   }
+});
+
+// Clean up when call ends
+app.post('/api/voice/call-ended', (req, res) => {
+  const callId = req.query.callId;
+  
+  // Clean up all call-related data
+  conversations.delete(callId);
+  activeCalls.delete(callId);
+  resetTimeoutAttempts(callId);
+  cleanupSessionFlags(callId);
+  
+  res.sendStatus(200);
 });
 
 // Serve React app for all non-API routes

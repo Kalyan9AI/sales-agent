@@ -2,6 +2,7 @@ const twilio = require('twilio');
 const AzureSpeechService = require('./azure-speech-service');
 const fs = require('fs');
 const path = require('path');
+const sdk = require('microsoft-cognitiveservices-speech-sdk');
 
 class TwilioAzureIntegration {
   constructor() {
@@ -97,13 +98,15 @@ class TwilioAzureIntegration {
     // Use Twilio's built-in speech recognition with enhanced settings
     const gather = twiml.gather({
       input: 'speech',
-      timeout: options.timeout || 5,
+      timeout: options.timeout || 10,  // 10 seconds default
       speechTimeout: options.speechTimeout || 'auto',
-      speechModel: 'experimental_utterances', // Better for natural conversation
-      enhanced: true, // Use enhanced speech recognition
+      speechModel: 'experimental_utterances',
+      enhanced: true,
       language: options.language || 'en-US',
       action: actionUrl,
-      method: 'POST'
+      method: 'POST',
+      maxAttempts: 3, // Maximum number of recognition attempts
+      hints: ['yes', 'no', 'goodbye', 'thank you'], // Common phrases to improve recognition
     });
 
     // Add a slight pause before listening
@@ -251,6 +254,42 @@ class TwilioAzureIntegration {
         }
       };
     }
+  }
+
+  async textToSpeech(text, options = {}) {
+    return new Promise((resolve, reject) => {
+      const synthesizer = new sdk.SpeechSynthesizer(this.speechConfig);
+      
+      // Set timeout for synthesis
+      const timeoutMs = options.timeoutMs || 15000; // 15 seconds default
+      const timeoutId = setTimeout(() => {
+        synthesizer.close();
+        reject(new Error(`Speech synthesis timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      
+      synthesizer.speakTextAsync(
+        text,
+        (result) => {
+          clearTimeout(timeoutId); // Clear timeout on success
+          if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) {
+            console.log(`🔊 Azure TTS: Successfully synthesized ${text.length} characters`);
+            const audioBuffer = Buffer.from(result.audioData);
+            synthesizer.close();
+            resolve(audioBuffer);
+          } else {
+            console.error('Azure TTS failed:', result.errorDetails);
+            synthesizer.close();
+            reject(new Error(`Speech synthesis failed: ${result.errorDetails}`));
+          }
+        },
+        (error) => {
+          clearTimeout(timeoutId); // Clear timeout on error
+          console.error('Azure TTS error:', error);
+          synthesizer.close();
+          reject(error);
+        }
+      );
+    });
   }
 }
 
