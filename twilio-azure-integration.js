@@ -1,5 +1,6 @@
 const twilio = require('twilio');
 const AzureSpeechService = require('./azure-speech-service');
+const { MuLawToPcm } = require('./audio-converter');
 const fs = require('fs');
 const path = require('path');
 const sdk = require('microsoft-cognitiveservices-speech-sdk');
@@ -7,6 +8,30 @@ const sdk = require('microsoft-cognitiveservices-speech-sdk');
 class TwilioAzureIntegration {
   constructor() {
     this.azureSpeech = new AzureSpeechService();
+    this.metrics = {
+      tts: [],
+      stt: []
+    };
+  }
+
+  logMetric(operation, duration) {
+    const metricType = operation === 'tts' ? 'tts' : 'stt';
+    this.metrics[metricType].push({
+      duration,
+      timestamp: Date.now()
+    });
+    
+    // Keep only last 100 metrics
+    if (this.metrics[metricType].length > 100) {
+      this.metrics[metricType].shift();
+    }
+    
+    // Log performance
+    console.log(`⏱️ AZURE ${operation.toUpperCase()}: ${duration}ms`);
+    
+    // Calculate and log average
+    const avg = this.metrics[metricType].reduce((sum, m) => sum + m.duration, 0) / this.metrics[metricType].length;
+    console.log(`📊 AZURE Average ${operation.toUpperCase()}: ${Math.round(avg)}ms`);
   }
 
   /**
@@ -16,6 +41,7 @@ class TwilioAzureIntegration {
    * @returns {Promise<Object>} - TwiML response object
    */
   async createTTSResponse(text, options = {}) {
+    const startTime = Date.now();
     const twiml = new twilio.twiml.VoiceResponse();
     
     try {
@@ -64,6 +90,9 @@ class TwilioAzureIntegration {
       
       console.log(`🔊 AZURE TTS: TwiML configured to play ${fullAudioUrl}`);
       console.log(`✅ AZURE TTS SUCCESS: Generated audio with Luna Neural voice`);
+      
+      // Log performance
+      this.logMetric('tts', Date.now() - startTime);
       
       return {
         twiml,
@@ -121,22 +150,15 @@ class TwilioAzureIntegration {
    * @returns {Promise<string>} - Transcribed text
    */
   async processSpeechWithAzure(twilioRequest) {
-    let transcribedText = '';
-    
-    // First try to get speech from Twilio's recognition
-    if (twilioRequest.SpeechResult) {
-      transcribedText = twilioRequest.SpeechResult;
-      console.log(`🎧 Twilio STT: "${transcribedText}"`);
-      
-      // Optionally, you could also send this to Azure for comparison/verification
-      // const azureResult = await this.verifyWithAzure(audioData);
-      
-      return transcribedText;
+    const startTime = Date.now();
+    try {
+      const transcription = await this.azureSpeech.speechToText(twilioRequest.audio);
+      this.logMetric('stt', Date.now() - startTime);
+      return transcription;
+    } catch (error) {
+      console.error('Azure STT error:', error);
+      throw error;
     }
-    
-    // If no speech result from Twilio, handle silence or errors
-    console.log('🎧 No speech detected by Twilio');
-    return '';
   }
 
   /**
@@ -203,10 +225,19 @@ class TwilioAzureIntegration {
    * @returns {Buffer} - PCM audio data
    */
   convertTwilioAudioToAzure(mulawBuffer) {
-    // This is a simplified conversion - you might need a more robust solution
-    // For now, return the buffer as-is and let Azure handle it
-    // In production, you'd want to use a library like 'pcm-util' for proper conversion
-    return mulawBuffer;
+    try {
+      // Convert μ-law to PCM using our optimized converter
+      const pcmBuffer = MuLawToPcm.toAzureFormat(mulawBuffer);
+      
+      // Log conversion metrics
+      console.log(`🔊 Audio Conversion: ${mulawBuffer.length} bytes μ-law -> ${pcmBuffer.byteLength} bytes PCM`);
+      
+      return Buffer.from(pcmBuffer);
+    } catch (error) {
+      console.error('Error converting audio format:', error);
+      // Return original buffer as fallback
+      return mulawBuffer;
+    }
   }
 
   /**
@@ -290,6 +321,19 @@ class TwilioAzureIntegration {
         }
       );
     });
+  }
+
+  getMetrics() {
+    return {
+      tts: {
+        average: this.metrics.tts.reduce((sum, m) => sum + m.duration, 0) / this.metrics.tts.length || 0,
+        samples: this.metrics.tts
+      },
+      stt: {
+        average: this.metrics.stt.reduce((sum, m) => sum + m.duration, 0) / this.metrics.stt.length || 0,
+        samples: this.metrics.stt
+      }
+    };
   }
 }
 

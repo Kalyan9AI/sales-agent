@@ -9,6 +9,8 @@ const OpenAI = require('openai');
 const path = require('path');
 const fs = require('fs');
 const TwilioAzureIntegration = require('./twilio-azure-integration');
+const { StreamManager } = require('./stream-manager.js');
+const { MuLawToPcm } = require('./audio-converter.js');
 require('dotenv').config();
 
 const app = express();
@@ -26,8 +28,8 @@ const io = socketIo(server, {
         ].filter(Boolean)
       : [
           process.env.CLIENT_URL,
-          "http://localhost:3001", 
-          "http://localhost:3002", 
+      "http://localhost:3001", 
+      "http://localhost:3002", 
           "http://localhost:3003"
         ].filter(Boolean),
     methods: ["GET", "POST"],
@@ -85,6 +87,9 @@ let azureIntegration;
 try {
   azureIntegration = new TwilioAzureIntegration();
   console.log('✅ Azure Speech Services integration initialized');
+  
+  // Start health checks
+  azureIntegration.azureSpeech.startHealthChecks(300000); // Check every 5 minutes
 } catch (error) {
   console.error('❌ Failed to initialize Azure Speech Services:', error.message);
   console.log('⚠️ Falling back to Twilio built-in TTS/STT');
@@ -114,7 +119,8 @@ function initializeSessionFlags(callId) {
     customerName: '',
     hotelName: '',
     products: [],
-    total: 0
+    total: 0,
+    recommendedProducts: [] // Add this to track recommendations
   });
 }
 
@@ -131,10 +137,92 @@ if (!fs.existsSync(conversationHistoryDir)) {
   console.log('📁 Created conversation history directory:', conversationHistoryDir);
 }
 
+// Add response caching
+const responseCache = new Map();
+const CACHE_MAX_AGE = 5 * 60 * 1000; // 5 minutes
+const CACHE_MAX_SIZE = 100;
+
+function getCacheKey(type, content, options = {}) {
+  return `${type}:${content}:${JSON.stringify(options)}`;
+}
+
+function getFromCache(key) {
+  const cached = responseCache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_MAX_AGE) {
+    return cached.value;
+  }
+  return null;
+}
+
+function addToCache(key, value) {
+  if (responseCache.size >= CACHE_MAX_SIZE) {
+    const oldestKey = Array.from(responseCache.keys())[0];
+    responseCache.delete(oldestKey);
+  }
+  responseCache.set(key, {
+    value,
+    timestamp: Date.now()
+  });
+}
+
+// Temp file cleanup configuration
+const TEMP_FILE_MAX_AGE = 30 * 60 * 1000; // 30 minutes
+
+function cleanupOldTempFiles() {
+  const tempDir = path.join(__dirname, 'temp_audio');
+  if (!fs.existsSync(tempDir)) return;
+
+  fs.readdir(tempDir, (err, files) => {
+    if (err) {
+      console.error('Error reading temp directory:', err);
+      return;
+    }
+    const now = Date.now();
+    files.forEach(file => {
+      const filePath = path.join(tempDir, file);
+      fs.stat(filePath, (err, stats) => {
+        if (err) {
+          console.error(`Error getting stats for ${file}:`, err);
+          return;
+        }
+        if (now - stats.mtime.getTime() > TEMP_FILE_MAX_AGE) {
+          fs.unlink(filePath, (err) => {
+            if (err) {
+              console.error(`Error deleting ${file}:`, err);
+            } else {
+              console.log(`🗑️ Cleaned up old temp file: ${file}`);
+            }
+          });
+        }
+      });
+    });
+  });
+}
+
+// Run cleanup every 15 minutes
+setInterval(cleanupOldTempFiles, 15 * 60 * 1000);
+
+// Run cleanup on startup
+cleanupOldTempFiles();
+
+// Add graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('Received SIGTERM. Cleaning up...');
+  cleanupOldTempFiles();
+  server.close(() => {
+    console.log('Server closed. Exiting.');
+    process.exit(0);
+  });
+});
+
 // Company context for AI agent
 const SYSTEM_CONTEXT = `You are Sarah, a friendly and professional sales representative from US Hotel Food Supplies. 
 
-ROLE: You are calling hotel managers to remind them about restocking orders and take new orders conversationally. You are calm, friendly, helpful, and never pushy. You should also look for natural opportunities to recommend related or seasonal products, without sounding aggressive or interruptive.
+ROLE: You are calling hotel manager **${managerName}** from ${hotelName} to remind them about restocking and take new orders in a natural and conversational tone. You are calm, friendly, helpful, and never pushy. 
+
+IMPORTANT: After discussing a reorder item, you must proactively suggest one similar or seasonal product — using clear naming and a helpful reason (e.g., better flavor, popular choice, seasonal special). This should feel helpful and relevant, never repetitive or robotic.
+
+The last purchased product was **${lastProduct}**. Your recommendation should be **${recommendedProduct}**, as it’s a seasonal or related option preferred by similar hotels.
 
 IMPORTANT: We operate in the United States and use the Imperial measurement system. Always use:
 - Ounces (oz) instead of grams (g)
@@ -151,7 +239,7 @@ YOUR OBJECTIVES:
 5. Suggest minimum order quantities and provide pricing.
 6. Confirm each order item with quantity and pricing.
 7. Ask if they need anything else after each order.
-8. Recommend similar or seasonal products where relevant, but only once per conversation unless customer shows strong interest.
+8. Always recommend a similar or seasonal product after any item discussion.
 9. End the call professionally when they're done.
 
 CONVERSATION MANAGEMENT:
@@ -380,7 +468,76 @@ function resetTimeoutAttempts(callId) {
   callTimeoutAttempts.delete(callId);
 }
 
-// Socket connection handling
+/**
+ * Prewarm AI and TTS services
+ * @returns {Promise<void>}
+ */
+async function prewarmServices() {
+  console.log('🔥 Prewarming AI and TTS services...');
+  
+  try {
+    // Prewarm GPT with a lightweight prompt
+    const gptPrewarm = openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [{ role: 'user', content: 'Say a brief hello.' }],
+      max_tokens: 20,
+      temperature: 0.3
+    }).catch(error => {
+      console.log('GPT prewarm non-critical error:', error.message);
+    });
+
+    // Prewarm Azure TTS with a short text
+    const ttsPrewarm = azureIntegration ? 
+      azureIntegration.createTTSResponse("Hello, this is Sarah.", {
+        rate: '0%',
+        pitch: '+5%',
+        volume: 'medium',
+        style: 'conversation'
+      }).catch(error => {
+        console.log('TTS prewarm non-critical error:', error.message);
+      }) : 
+      Promise.resolve();
+
+    // Wait for both to complete
+    await Promise.all([gptPrewarm, ttsPrewarm]);
+    console.log('✅ Services prewarmed successfully');
+  } catch (error) {
+    // Non-critical error, just log it
+    console.log('⚠️ Prewarm attempt completed with non-critical errors');
+  }
+}
+
+// Initialize stream manager
+const streamManager = new StreamManager({
+  azureClient: azureIntegration,
+  openaiClient: openai
+});
+
+// Handle stream events
+streamManager.on('responseChunk', async ({ streamId, text }) => {
+  try {
+    // Convert text to speech in chunks
+    const audioBuffer = await azureIntegration.createTTSResponse(text);
+    const ws = mediaStreams.get(streamId);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        event: 'media',
+        streamSid: streamId,
+        media: {
+          payload: audioBuffer.toString('base64')
+        }
+      }));
+    }
+  } catch (error) {
+    console.error('Error handling response chunk:', error);
+  }
+});
+
+streamManager.on('error', ({ message, error }) => {
+  console.error(message, error);
+});
+
+// Update WebSocket connection handler
 io.on('connection', (socket) => {
   console.log('🔌 Client connected:', socket.id);
   
@@ -409,7 +566,7 @@ app.post('/api/make-call', async (req, res) => {
     
     // Initialize order tracking when call starts
     initializeSessionFlags(callId);
-
+    
     // Use custom context if provided, otherwise use default
     const systemContext = context || SYSTEM_CONTEXT;
     
@@ -417,6 +574,12 @@ app.post('/api/make-call', async (req, res) => {
     conversations.set(callId, [
       { role: 'system', content: systemContext }
     ]);
+
+    // Start prewarming services in parallel with Twilio call setup
+    const prewarmPromise = prewarmServices().catch(error => {
+      // Non-critical error, just log it
+      console.log('⚠️ Prewarm error (non-critical):', error.message);
+    });
 
     console.log(`📞 ATTEMPTING CALL:`);
     console.log(`   📱 To: ${phoneNumber}`);
@@ -527,10 +690,10 @@ app.post('/api/voice/incoming', async (req, res) => {
     });
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: "gpt-3.5-turbo",
       messages: conversation,
-      max_tokens: 50,  // Reduced to force shorter responses
-      temperature: 0.3,  // Reduced from 0.7 for more consistent responses
+      max_tokens: 50,  // Keeping reduced tokens for shorter responses
+      temperature: 0.3,  // Keeping reduced temperature for consistent responses
     });
 
     let aiResponse = completion.choices[0].message.content;
@@ -802,283 +965,70 @@ app.post('/api/voice/partial-speech', (req, res) => {
   res.send(twiml.toString());
 });
 
-// Process speech input
-app.post('/api/voice/process-speech', async (req, res) => {
-  const callId = req.query.callId;
-  const speechResult = req.body.SpeechResult;
-  const confidence = req.body.Confidence;
-  
-  console.log(`🗣️ WEBHOOK: /api/voice/process-speech called for callId: ${callId}`);
-  console.log(`📋 Full request body:`, req.body);
-  
-  // Reset timeout attempts since user responded
-  resetTimeoutAttempts(callId);
-  
-  console.log(`🎧 Twilio STT: "${speechResult}"`);
-  console.log(`👤 User speech: "${speechResult}"`);
-  
-  // Emit user speech to frontend
-  io.emit('userSpeechUpdate', {
-    callId,
-    speech: speechResult,
-    confidence,
-    timestamp: new Date()
+// Add performance monitoring
+const performanceMetrics = {
+  openai: [],
+  azure: [],
+  twilio: []
+};
+
+function logPerformance(service, operation, duration) {
+  performanceMetrics[service].push({
+    operation,
+    duration,
+    timestamp: Date.now()
   });
   
-  const twiml = new twilio.twiml.VoiceResponse();
+  // Keep only last 100 metrics
+  if (performanceMetrics[service].length > 100) {
+    performanceMetrics[service].shift();
+  }
   
+  // Log performance metrics
+  console.log(`⏱️ ${service.toUpperCase()} ${operation}: ${duration}ms`);
+  
+  // Calculate and log average
+  const avg = performanceMetrics[service].reduce((sum, metric) => sum + metric.duration, 0) / performanceMetrics[service].length;
+  console.log(`📊 ${service.toUpperCase()} Average ${operation}: ${Math.round(avg)}ms`);
+}
+
+// Process speech input
+app.post('/api/voice/process-speech', async (req, res) => {
+  const startTime = Date.now();
   try {
-    // Process speech with Azure integration
-    let userSpeech = '';
+    const callId = req.query.callId;
+    let userSpeech = req.body.SpeechResult || '';
+    
     if (azureIntegration) {
       userSpeech = await azureIntegration.processSpeechWithAzure(req.body);
-    } else {
-      userSpeech = req.body.SpeechResult || '';
     }
-    
-    console.log(`👤 User speech: "${userSpeech}"`);
 
     if (userSpeech) {
-      // Get conversation history
       const conversation = conversations.get(callId) || [];
-      
-      // Add user speech to conversation
       conversation.push({ role: 'user', content: userSpeech });
 
-      // Emit user speech to connected clients
-      io.emit('conversationUpdate', {
-        callId,
-        type: 'user_speech',
-        content: userSpeech,
-        timestamp: new Date()
-      });
-      console.log(`👤 User speech emitted for callId ${callId}: "${userSpeech}"`);
-
-      // Get AI response
       const aiResponse = await generateAIResponse(conversation, callId, activeCalls.get(callId));
-      
-      // Check if the AI response contains call ending phrases
-      const callEndingPhrases = [
-        'have a great day',
-        'have a wonderful day',
-        'have a good day',
-        'have a nice day',
-        'goodbye',
-        'good bye',
-        'talk to you later',
-        'speak to you soon',
-        'thank you for your time',
-        'thanks for your time',
-        'have a pleasant day',
-        'take care'
-      ];
-      
-      const shouldEndCall = callEndingPhrases.some(phrase => 
-        aiResponse.toLowerCase().includes(phrase.toLowerCase())
-      );
-      
-      // Add AI response to conversation
-      conversation.push({ role: 'assistant', content: aiResponse });
-      conversations.set(callId, conversation);
-
-      // Emit AI response to connected clients
-      io.emit('conversationUpdate', {
-        callId,
-        type: 'ai_response',
-        content: aiResponse,
-        timestamp: new Date()
-      });
-      console.log(`🤖 AI Response emitted for callId ${callId}: "${aiResponse}"`);
-      
-      // Use Azure TTS if available, otherwise fallback to Twilio
-      let azureSuccess = false;
-      let azureTwiml = null;
-      if (azureIntegration) {
-        try {
-          console.log(`🎙️ USING AZURE TTS: Synthesizing "${aiResponse}" with Luna Neural voice`);
-          
-          // Process natural pause markers and convert to SSML
-          const processedText = aiResponse.replace(/\*pause\*/g, '<break time="0.8s"/>');
-          
-          const ttsResult = await azureIntegration.createTTSResponse(processedText, {
-            rate: '0%',  // Normal speed for clear, confident delivery
-            pitch: '+5%', // Slightly higher pitch for confident, brave tone
+      const ttsResult = await createTTSResponse(aiResponse, {
+        rate: '0%',
+        pitch: '+5%',
             volume: 'medium',
             style: 'conversation'
           });
           
-          console.log(`✅ AZURE TTS SUCCESS: Generated audio with Luna voice`);
-          
-          // Use the Azure TwiML response directly
-          azureTwiml = ttsResult.twiml;
-          azureSuccess = true;
-          
-          // Schedule cleanup of temp audio file
-          if (ttsResult.audioFileName) {
-            setTimeout(() => {
-              azureIntegration.cleanupTempAudio(ttsResult.audioFileName);
-            }, 30000); // Clean up after 30 seconds
-          }
-          
-        } catch (azureError) {
-          console.error('❌ AZURE TTS FAILED, falling back to Twilio Alice voice:', azureError);
-          console.log(`🔄 USING TWILIO TTS: Falling back to Alice voice for "${aiResponse}"`);
-          twiml.say({
-            voice: 'alice',
-            language: 'en-US'
-          }, aiResponse);
-        }
-      } else {
-        // Fallback to Twilio's built-in TTS
-        console.log(`🔄 USING TWILIO TTS: Azure not available, using Alice voice for "${aiResponse}"`);
-        twiml.say({
-          voice: 'alice',
-          language: 'en-US'
-        }, aiResponse);
-      }
-      
-      // If this is a call ending response, prepare to hang up after speaking
-      if (shouldEndCall) {
-        console.log(`🔚 CALL ENDING DETECTED: Will hang up after response`);
-        
-        // Add the audio and then hang up
-        if (azureSuccess && azureTwiml) {
-          const finalTwiml = new twilio.twiml.VoiceResponse();
-          
-          // Add the Azure audio content
-          const azureTwimlStr = azureTwiml.toString();
-          const playMatch = azureTwimlStr.match(/<Play>([^<]+)<\/Play>/);
-          if (playMatch) {
-            finalTwiml.play(playMatch[1]);
-          } else {
-            finalTwiml.say('Thank you for your time. Have a great day!');
-          }
-          
-          // Add a brief pause and then hang up
-          finalTwiml.pause({ length: 1 });
-          finalTwiml.hangup();
-          
-          // Clean up call data
-          setTimeout(() => {
-            // Save conversation history before cleanup
-            const conversation = conversations.get(callId) || [];
-            const callData = activeCalls.get(callId);
-            if (conversation.length > 0) {
-              saveConversationHistory(callId, conversation, callData);
-            }
-            
-            activeCalls.delete(callId);
-            conversations.delete(callId);
-            resetTimeoutAttempts(callId);
-            io.emit('callCompleted', { callId, reason: 'natural_ending' });
-          }, 2000);
-          
-          res.type('text/xml');
-          res.send(finalTwiml.toString());
-          return;
-        } else {
-          // Use regular TwiML with hangup
-          twiml.pause({ length: 1 });
-          twiml.hangup();
-          
-          // Clean up call data
-          setTimeout(() => {
-            // Save conversation history before cleanup
-            const conversation = conversations.get(callId) || [];
-            const callData = activeCalls.get(callId);
-            if (conversation.length > 0) {
-              saveConversationHistory(callId, conversation, callData);
-            }
-            
-            activeCalls.delete(callId);
-            conversations.delete(callId);
-            resetTimeoutAttempts(callId);
-            io.emit('callCompleted', { callId, reason: 'natural_ending' });
-          }, 2000);
-          
-          res.type('text/xml');
-          res.send(twiml.toString());
-          return;
-        }
-      } else {
-        // Normal conversation flow - continue listening for more speech
-    
-      // Set up enhanced speech recognition with interruption support
-      if (azureSuccess && azureTwiml) {
-        // Create a new TwiML response that includes the Azure audio and gather settings
-        const finalTwiml = new twilio.twiml.VoiceResponse();
-        
-        // Add the Azure audio content by parsing and extracting the play command
-        const azureTwimlStr = azureTwiml.toString();
-        const playMatch = azureTwimlStr.match(/<Play>([^<]+)<\/Play>/);
-        if (playMatch) {
-          finalTwiml.play(playMatch[1]);
-        } else {
-          // Fallback: use the Azure TwiML content directly
-          finalTwiml.say('Please wait while I prepare your response.');
-        }
-        
-        // Add speech recognition with proper timeout handling
-        finalTwiml.gather({
-          input: 'speech',
-          timeout: 10,  // Increased to 10 seconds
-          speechTimeout: 'auto',
-          speechModel: 'experimental_utterances',
-          enhanced: true,
-          language: 'en-US',
-          action: `/api/voice/process-speech?callId=${callId}`,
-          method: 'POST',
-          bargeIn: true,  // Enable interruption - user can speak while agent is talking
-          partialResultCallback: `/api/voice/partial-speech?callId=${callId}` // For real-time interruption
-        });
-        
-        // Handle timeout scenario
-        finalTwiml.redirect(`/api/voice/timeout?callId=${callId}`);
+      const twiml = new twilio.twiml.VoiceResponse();
+      twiml.play({ loop: 1 }, ttsResult.audioUrl);
         
         res.type('text/xml');
-        res.send(finalTwiml.toString());
+      res.send(twiml.toString());
         return;
-      } else {
-        // Use regular TwiML with fallback
-        twiml.gather({
-          input: 'speech',
-          timeout: 10,  // Increased to 10 seconds
-          speechTimeout: 'auto',
-          speechModel: 'experimental_utterances',
-          enhanced: true,
-          language: 'en-US',
-          action: `/api/voice/process-speech?callId=${callId}`,
-          method: 'POST',
-          bargeIn: true
-        });
-        
-        // Handle timeout scenario
-        twiml.redirect(`/api/voice/timeout?callId=${callId}`);
-      }
-      }
-    } else {
-      // No speech detected
-      twiml.say('I didn\'t hear anything. Let me try again.');
-      twiml.gather({
-        input: 'speech',
-        timeout: 10,
-        speechTimeout: 'auto',
-        speechModel: 'experimental_utterances',
-        enhanced: true,
-        language: 'en-US',
-        action: `/api/voice/process-speech?callId=${callId}`,
-        method: 'POST',
-        bargeIn: true
-      });
-      twiml.redirect(`/api/voice/timeout?callId=${callId}`);
     }
-    
   } catch (error) {
-    console.error('Error processing speech:', error);
-    twiml.say('I apologize for the technical difficulty. Let me transfer you to a human representative.');
-    twiml.hangup();
+    console.error('Error in speech processing:', error);
   }
   
+  // Default response if something goes wrong
+  const twiml = new twilio.twiml.VoiceResponse();
+  twiml.say('I apologize, but I could not process that. Could you please repeat?');
   res.type('text/xml');
   res.send(twiml.toString());
 });
@@ -1114,16 +1064,6 @@ app.post('/api/voice/status', (req, res) => {
           saveConversationHistory(callId, conversation, {
             ...callData,
             orderDetails: orderInfo
-          });
-        }
-        
-        // Emit final order status
-        if (orderInfo) {
-          io.emit('orderUpdate', {
-            callId,
-            orderDetails: orderInfo,
-            final: true,
-            status: 'completed'
           });
         }
         
@@ -1490,7 +1430,7 @@ app.get('/api/conversation-history', (req, res) => {
       totalFiles: files.length,
       directory: conversationHistoryDir
     });
-  } catch (error) {
+      } catch (error) {
     console.error('❌ Error listing conversation history files:', error);
     res.status(500).json({ 
       error: 'Failed to list conversation history files',
@@ -1521,137 +1461,98 @@ app.get('/api/conversation-history/:filename', (req, res) => {
 
 // Enhanced AI Response Generation
 async function generateAIResponse(conversation, callId, hotel) {
+  const startTime = Date.now();
   try {
-    console.log('🤖 Generating AI response for conversation:', conversation.slice(-3));
+    const lastMessage = conversation[conversation.length - 1]?.content || '';
+    const cacheKey = getCacheKey('openai', lastMessage);
     
-    // Get session flags and order details
-    const flags = sessionFlags.get(callId) || initializeSessionFlags(callId);
-    const order = orderDetails.get(callId);
-    
-    // Extract customer name and hotel name from conversation if not already set
-    if (!order.customerName || !order.hotelName) {
-      const managerMatch = conversation.find(msg => 
-        msg.role === 'user' && 
-        msg.content.toLowerCase().includes('speaking with') || 
-        msg.content.toLowerCase().includes('this is')
-      );
-      
-      if (managerMatch) {
-        order.customerName = extractManagerName(managerMatch.content);
-        if (hotel?.hotelName) {
-          order.hotelName = hotel.hotelName;
-        }
-      }
+    // Check cache
+    const cached = getFromCache(cacheKey);
+    if (cached) {
+      console.log('Using cached OpenAI response');
+      return cached;
     }
-    
-    // Extract order information from the last AI response
-    const lastAIResponse = conversation.find(msg => msg.role === 'assistant')?.content;
-    if (lastAIResponse) {
-      const orderInfo = extractOrderInfo(lastAIResponse);
-      if (orderInfo) {
-        order.products.push(orderInfo);
-        order.total = calculateTotal(order.products);
-      }
-    }
-    
-    // Update order details
-    orderDetails.set(callId, order);
-    
-    // Check for conversation end indicators
-    const lastUserMessage = conversation.find(msg => msg.role === 'user')?.content.toLowerCase() || '';
-    if (lastUserMessage.includes("that's all") || lastUserMessage.includes("goodbye") || lastUserMessage.includes("thank you")) {
-      flags.customerDone = true;
-      
-      // Emit final order details
-      io.emit('orderUpdate', {
-        callId,
-        orderDetails: order,
-        final: true
-      });
-    }
-    
-    // Generate normal AI response using existing system
-    const messages = [
-      { 
-        role: 'system', 
-        content: SYSTEM_CONTEXT + `\nCURRENT SESSION STATE:\nreorderConfirmed: ${flags.reorderConfirmed}\nupsellAttempted: ${flags.upsellAttempted}\ncustomerDone: ${flags.customerDone}\norderTotal: $${order.total}`
-      },
-      ...conversation.map(msg => ({
-        role: msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.content
-      }))
+
+    // Get customer context
+    const order = orderDetails.get(callId) || {
+      customerName: '',
+      hotelName: '',
+      products: [],
+      total: 0,
+      recommendedProducts: [] // Add this to track recommendations
+    };
+
+    // Add customer context message
+    const contextMessage = {
+      role: 'system',
+      content: `Current customer context:
+- Customer Name: ${order.customerName || 'Unknown'}
+- Hotel Name: ${order.hotelName || 'Unknown'}
+- Last Order: ${order.products.length > 0 ? 
+    order.products[order.products.length - 1].product + 
+    ' (' + order.products[order.products.length - 1].quantity + ' cases)' 
+    : 'No previous orders'}
+- Total Orders Value: $${order.total.toFixed(2)}
+${order.recommendedProducts.length > 0 ? 
+`- Previously Recommended: ${order.recommendedProducts.join(', ')}
+Consider suggesting different but related products if customer showed interest.` : 
+'Feel free to recommend products from our catalog.'}
+
+Please use this information to personalize the conversation and make relevant product suggestions.`
+    };
+
+    // Add context message to conversation
+    const trimmedConversation = [
+      conversation[0], // System message
+      contextMessage,  // Customer context
+      ...conversation.slice(-3) // Last 3 messages for context
     ];
-    
+
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: messages,
-      temperature: 0.7,
-      max_tokens: 150
+      model: 'gpt-3.5-turbo',
+      messages: trimmedConversation,
+      temperature: 0.5,
+      max_tokens: 100
     });
 
-    const aiResponse = completion.choices[0].message.content;
-    
-    // Update session flags based on AI response
-    if (aiResponse.toLowerCase().includes("would you like to reorder")) {
-      flags.reorderConfirmed = true;
+    const response = completion.choices[0].message.content;
+
+    // Update recommended products if AI suggests something new
+    const productMatches = response.match(/would you like to try our ([\w\s]+)|\b(bagels?|croissants?|yogurt|jam|coffee|water)\b/gi);
+    if (productMatches) {
+      const newRecommendation = productMatches[0].replace(/would you like to try our /i, '').trim();
+      if (!order.recommendedProducts.includes(newRecommendation)) {
+        order.recommendedProducts.push(newRecommendation);
+        // Keep only last 3 recommendations
+        if (order.recommendedProducts.length > 3) {
+          order.recommendedProducts.shift();
+        }
+        orderDetails.set(callId, order);
+      }
     }
-    if (aiResponse.toLowerCase().includes("also") && aiResponse.toLowerCase().includes("would you like")) {
-      flags.upsellAttempted = true;
-    }
-    
-    // Save updated flags
-    sessionFlags.set(callId, flags);
-    
-    // Emit order update if there are changes
-    if (order.products.length > 0) {
-      io.emit('orderUpdate', {
-        callId,
-        orderDetails: order,
-        final: flags.customerDone
-      });
-    }
-    
-    return aiResponse;
-    
+
+    addToCache(cacheKey, response);
+    return response;
   } catch (error) {
-    console.error('❌ Error generating AI response:', error);
+    console.error('Error generating AI response:', error);
     return "I apologize, but I'm having trouble processing your request right now. Could you please repeat that?";
   }
 }
 
-// Helper function to extract manager name from conversation
-function extractManagerName(content) {
-  const words = content.split(' ');
-  const nameIndex = words.findIndex(word => 
-    word.toLowerCase() === 'am' || 
-    word.toLowerCase() === 'is'
-  );
+// Modify the TTS response generation
+async function createTTSResponse(text, options = {}) {
+  const cacheKey = getCacheKey('tts', text, options);
   
-  if (nameIndex >= 0 && nameIndex < words.length - 1) {
-    return words[nameIndex + 1];
+  // Check cache
+  const cached = getFromCache(cacheKey);
+  if (cached) {
+    console.log('Using cached TTS response');
+    return cached;
   }
-  return '';
-}
-
-// Helper function to extract order information from AI response
-function extractOrderInfo(response) {
-  // Look for patterns like "X cases of [product] at $[price] per case"
-  const orderMatch = response.match(/(\d+)\s+cases?\s+of\s+([^$]+?)\s+at\s+\$(\d+\.?\d*)/i);
   
-  if (orderMatch) {
-    return {
-      quantity: parseInt(orderMatch[1]),
-      product: orderMatch[2].trim(),
-      pricePerCase: parseFloat(orderMatch[3]),
-      total: parseInt(orderMatch[1]) * parseFloat(orderMatch[3])
-    };
-  }
-  return null;
-}
-
-// Helper function to calculate total order amount
-function calculateTotal(products) {
-  return products.reduce((sum, item) => sum + item.total, 0);
+  const ttsResult = await azureIntegration.createTTSResponse(text, options);
+  addToCache(cacheKey, ttsResult);
+  return ttsResult;
 }
 
 // Call analysis endpoint
@@ -1662,7 +1563,7 @@ app.post('/api/analyze-call', async (req, res) => {
     console.log(`🔍 Analyzing call ${callId} with AI...`);
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: "gpt-3.5-turbo",
       messages: [
         {
           role: "system",
@@ -1674,7 +1575,7 @@ app.post('/api/analyze-call', async (req, res) => {
         }
       ],
       temperature: 0.3,
-      max_tokens: 2000
+      max_tokens: 1000  // Reduced from 2000 as GPT-3.5-turbo can be more concise
     });
 
     const analysisText = completion.choices[0].message.content;
@@ -1761,8 +1662,234 @@ app.get('*', (req, res) => {
   }
 });
 
+// Add performance metrics endpoint
+app.get('/api/performance', (req, res) => {
+  res.json({
+    metrics: performanceMetrics,
+    summary: {
+      openai: {
+        average: performanceMetrics.openai.reduce((sum, m) => sum + m.duration, 0) / performanceMetrics.openai.length || 0
+      },
+      azure: {
+        average: performanceMetrics.azure.reduce((sum, m) => sum + m.duration, 0) / performanceMetrics.azure.length || 0
+      },
+      twilio: {
+        average: performanceMetrics.twilio.reduce((sum, m) => sum + m.duration, 0) / performanceMetrics.twilio.length || 0
+      }
+    }
+  });
+});
+
+// Test endpoint to measure latency
+app.post('/api/test/latency', async (req, res) => {
+  const startTime = Date.now();
+  try {
+    // Test OpenAI latency
+    const openaiStart = Date.now();
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: "Say hello briefly." }
+      ],
+      max_tokens: 20  // Reduced from 50 as it's just a test greeting
+    });
+    const openaiDuration = Date.now() - openaiStart;
+    logPerformance('openai', 'test_completion', openaiDuration);
+
+    // Test Azure TTS latency
+    let azureTTSDuration = 0;
+    if (azureIntegration) {
+      const ttsStart = Date.now();
+      await azureIntegration.createTTSResponse("Hello, this is a test message.", {
+        rate: '0%',
+        pitch: '+5%',
+        volume: 'medium',
+        style: 'conversation'
+      });
+      azureTTSDuration = Date.now() - ttsStart;
+      logPerformance('azure', 'test_tts', azureTTSDuration);
+    }
+
+    // Get all metrics
+    const metrics = {
+      current: {
+        total: Date.now() - startTime,
+        openai: openaiDuration,
+        azure_tts: azureTTSDuration
+      },
+      historical: performanceMetrics,
+      azure_service: azureIntegration ? azureIntegration.getMetrics() : null
+    };
+
+    res.json({
+      success: true,
+      metrics
+    });
+
+  } catch (error) {
+    console.error('Error in latency test:', error);
+    res.status(500).json({
+      error: 'Latency test failed',
+      details: error.message
+    });
+  }
+});
+
+// Add health check endpoint
+app.get('/health', async (req, res) => {
+  const health = {
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    services: {
+      azure: null,
+      twilio: null,
+      websocket: {
+        status: wss.clients.size > 0 ? 'healthy' : 'idle',
+        connections: wss.clients.size
+      }
+    }
+  };
+
+  // Check Azure health if available
+  if (azureIntegration) {
+    try {
+      health.services.azure = await azureIntegration.azureSpeech.checkHealth();
+    } catch (error) {
+      health.services.azure = {
+        status: 'unhealthy',
+        error: error.message
+      };
+      health.status = 'degraded';
+    }
+    } else {
+    health.services.azure = {
+      status: 'disabled',
+      note: 'Using Twilio fallback'
+    };
+  }
+
+  // Check Twilio health
+  try {
+    const twilioStatus = await twilioClient.api.v2010.accounts(process.env.TWILIO_ACCOUNT_SID).fetch();
+    health.services.twilio = {
+      status: twilioStatus.status === 'active' ? 'healthy' : 'degraded',
+      type: twilioStatus.type,
+      friendlyName: twilioStatus.friendlyName
+    };
+  } catch (error) {
+    health.services.twilio = {
+      status: 'unhealthy',
+      error: error.message 
+    };
+    health.status = 'degraded';
+  }
+
+  // Overall health is unhealthy if any critical service is down
+  if (health.services.twilio?.status === 'unhealthy' || 
+      (azureIntegration && health.services.azure?.status === 'unhealthy')) {
+    health.status = 'unhealthy';
+  }
+
+  res.json(health);
+});
+
+// Basic input sanitization middleware
+function sanitizeInput(str) {
+  if (typeof str !== 'string') return str;
+  return str
+    .replace(/[<>]/g, '') // Remove < and >
+    .replace(/javascript:/gi, '') // Remove javascript: protocol
+    .trim();
+}
+
+app.use((req, res, next) => {
+  if (req.body) {
+    Object.keys(req.body).forEach(key => {
+      if (typeof req.body[key] === 'string') {
+        req.body[key] = sanitizeInput(req.body[key]);
+      }
+    });
+  }
+  if (req.query) {
+    Object.keys(req.query).forEach(key => {
+      if (typeof req.query[key] === 'string') {
+        req.query[key] = sanitizeInput(req.query[key]);
+      }
+    });
+  }
+  next();
+});
+
+// Add basic error recovery
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  // Clean up any hanging resources
+  if (req.query.callId) {
+    cleanupCall(req.query.callId);
+  }
+  res.status(500).json({ error: 'An unexpected error occurred' });
+});
+
+/**
+ * Enhanced call cleanup function
+ * @param {string} callId - Call identifier
+ * @param {boolean} [immediate=false] - Whether to clean up immediately
+ */
+function cleanupCall(callId, immediate = false) {
+  try {
+    // Get call data before cleanup
+    const callData = activeCalls.get(callId);
+    const conversation = conversations.get(callId) || [];
+    const order = orderDetails.get(callId);
+
+    // Save conversation history if exists
+    if (conversation.length > 0) {
+      try {
+        saveConversationHistory(callId, conversation, {
+          ...callData,
+          orderDetails: order
+        });
+      } catch (error) {
+        console.error('Error saving conversation history:', error);
+      }
+    }
+
+    // Emit final status
+    io.emit('callCompleted', {
+      callId,
+      orderInfo: order,
+      status: 'terminated'
+    });
+
+    // Clean up resources
+    activeCalls.delete(callId);
+    conversations.delete(callId);
+    resetTimeoutAttempts(callId);
+    cleanupSessionFlags(callId);
+
+    // Clean up any associated temp files
+    const tempDir = path.join(__dirname, 'temp_audio');
+    if (fs.existsSync(tempDir)) {
+      fs.readdir(tempDir, (err, files) => {
+        if (err) return;
+        files.forEach(file => {
+          if (file.includes(callId)) {
+            const filePath = path.join(tempDir, file);
+            fs.unlink(filePath, () => {});
+          }
+        });
+      });
+    }
+
+    console.log(`🧹 Cleaned up resources for call ${callId}`);
+  } catch (error) {
+    console.error(`Error during call cleanup for ${callId}:`, error);
+  }
+}
+
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`🚀 Voice Agent Server running on port ${PORT}`);
   console.log(`📞 Twilio configured: ${!!process.env.TWILIO_ACCOUNT_SID}`);
   console.log(`🤖 OpenAI configured: ${!!process.env.OPENAI_API_KEY}`);
@@ -1772,4 +1899,9 @@ server.listen(PORT, () => {
     console.log(`🌍 Azure region: ${process.env.AZURE_SPEECH_REGION}`);
   }
   console.log(`📁 Temp audio directory: ${path.join(__dirname, 'temp_audio')}`);
+
+  // Prewarm services at startup
+  await prewarmServices().catch(error => {
+    console.log('⚠️ Initial prewarm error (non-critical):', error.message);
+  });
 });

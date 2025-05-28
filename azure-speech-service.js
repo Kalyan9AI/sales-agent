@@ -8,6 +8,10 @@ class AzureSpeechService {
     this.speechRegion = process.env.AZURE_SPEECH_REGION;
     this.customVoiceName = process.env.AZURE_CUSTOM_VOICE_NAME || 'luna';
     
+    // Retry configuration
+    this.MAX_RETRIES = 3;
+    this.RETRY_DELAY = 1000; // 1 second
+    
     if (!this.speechKey || !this.speechRegion) {
       throw new Error('Azure Speech key and region must be set in environment variables');
     }
@@ -27,6 +31,32 @@ class AzureSpeechService {
     console.log(`🎙️ Azure Speech Service initialized with voice: ${this.speechConfig.speechSynthesisVoiceName}`);
     console.log(`🔊 Audio format: Audio16Khz32KBitRateMonoMp3 for optimal Luna voice quality`);
     console.log(`⚙️ Configured timeouts: Initial=10s, End=5s, MaxRetry=15s`);
+  }
+
+  /**
+   * Retry wrapper for async operations
+   * @param {Function} operation - Operation to retry
+   * @param {string} operationName - Name of operation for logging
+   * @returns {Promise} - Operation result
+   */
+  async withRetry(operation, operationName) {
+    let lastError;
+    
+    for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        if (attempt < this.MAX_RETRIES) {
+          const delay = this.RETRY_DELAY * attempt;
+          console.warn(`⚠️ ${operationName} failed (attempt ${attempt}/${this.MAX_RETRIES}), retrying in ${delay}ms:`, error.message);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+    
+    console.error(`❌ ${operationName} failed after ${this.MAX_RETRIES} attempts:`, lastError);
+    throw lastError;
   }
 
   /**
@@ -114,43 +144,44 @@ class AzureSpeechService {
   }
 
   /**
-   * Convert speech to text from audio buffer
+   * Convert speech to text from audio buffer with retries
    * @param {Buffer} audioBuffer - Audio data
    * @returns {Promise<string>} - Transcribed text
    */
   async speechToText(audioBuffer) {
-    return new Promise((resolve, reject) => {
-      // Create audio config from buffer
-      const pushStream = sdk.AudioInputStream.createPushStream();
-      pushStream.write(audioBuffer);
-      pushStream.close();
-      
-      const audioConfig = sdk.AudioConfig.fromStreamInput(pushStream);
-      const recognizer = new sdk.SpeechRecognizer(this.speechConfig, audioConfig);
+    return this.withRetry(async () => {
+      return new Promise((resolve, reject) => {
+        const pushStream = sdk.AudioInputStream.createPushStream();
+        pushStream.write(audioBuffer);
+        pushStream.close();
+        
+        const audioConfig = sdk.AudioConfig.fromStreamInput(pushStream);
+        const recognizer = new sdk.SpeechRecognizer(this.speechConfig, audioConfig);
 
-      recognizer.recognizeOnceAsync(
-        (result) => {
-          if (result.reason === sdk.ResultReason.RecognizedSpeech) {
-            console.log(`🎧 Azure STT: Recognized "${result.text}"`);
+        recognizer.recognizeOnceAsync(
+          (result) => {
+            if (result.reason === sdk.ResultReason.RecognizedSpeech) {
+              console.log(`🎧 Azure STT: Recognized "${result.text}"`);
+              recognizer.close();
+              resolve(result.text);
+            } else if (result.reason === sdk.ResultReason.NoMatch) {
+              console.log('🎧 Azure STT: No speech could be recognized');
+              recognizer.close();
+              resolve('');
+            } else {
+              console.error('Azure STT failed:', result.errorDetails);
+              recognizer.close();
+              reject(new Error(`Speech recognition failed: ${result.errorDetails}`));
+            }
+          },
+          (error) => {
+            console.error('Azure STT error:', error);
             recognizer.close();
-            resolve(result.text);
-          } else if (result.reason === sdk.ResultReason.NoMatch) {
-            console.log('🎧 Azure STT: No speech could be recognized');
-            recognizer.close();
-            resolve('');
-          } else {
-            console.error('Azure STT failed:', result.errorDetails);
-            recognizer.close();
-            reject(new Error(`Speech recognition failed: ${result.errorDetails}`));
+            reject(error);
           }
-        },
-        (error) => {
-          console.error('Azure STT error:', error);
-          recognizer.close();
-          reject(error);
-        }
-      );
-    });
+        );
+      });
+    }, 'Speech-to-text conversion');
   }
 
   /**
@@ -248,6 +279,97 @@ class AzureSpeechService {
           voiceType: 'Neural'
         }
       ];
+    }
+  }
+
+  /**
+   * Check Azure service health
+   * @returns {Promise<Object>} Health check results
+   */
+  async checkHealth() {
+    const health = {
+      status: 'healthy',
+      services: {
+        tts: { status: 'unknown', latency: null },
+        stt: { status: 'unknown', latency: null }
+      },
+      lastChecked: new Date().toISOString()
+    };
+
+    try {
+      // Test TTS
+      const startTts = Date.now();
+      await this.textToSpeech('Health check test.');
+      health.services.tts = {
+        status: 'healthy',
+        latency: Date.now() - startTts
+      };
+    } catch (error) {
+      health.services.tts = {
+        status: 'unhealthy',
+        error: error.message
+      };
+      health.status = 'degraded';
+    }
+
+    try {
+      // Test STT with a simple audio buffer
+      const startStt = Date.now();
+      const testBuffer = Buffer.from([0, 0, 0, 0]); // Empty audio
+      await this.speechToText(testBuffer);
+      health.services.stt = {
+        status: 'healthy',
+        latency: Date.now() - startStt
+      };
+    } catch (error) {
+      health.services.stt = {
+        status: 'unhealthy',
+        error: error.message
+      };
+      health.status = 'degraded';
+    }
+
+    // Overall status is unhealthy if both services are down
+    if (health.services.tts.status === 'unhealthy' && health.services.stt.status === 'unhealthy') {
+      health.status = 'unhealthy';
+    }
+
+    return health;
+  }
+
+  /**
+   * Start periodic health checks
+   * @param {number} interval - Check interval in milliseconds
+   */
+  startHealthChecks(interval = 300000) { // Default: 5 minutes
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+    }
+
+    this.healthCheckInterval = setInterval(async () => {
+      try {
+        const health = await this.checkHealth();
+        if (health.status !== 'healthy') {
+          console.warn('⚠️ Azure services health check failed:', health);
+        } else {
+          console.log('✅ Azure services health check passed:', health);
+        }
+      } catch (error) {
+        console.error('❌ Health check error:', error);
+      }
+    }, interval);
+
+    console.log(`🏥 Started Azure services health checks (interval: ${interval}ms)`);
+  }
+
+  /**
+   * Stop health checks
+   */
+  stopHealthChecks() {
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
+      console.log('🛑 Stopped Azure services health checks');
     }
   }
 }
