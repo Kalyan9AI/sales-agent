@@ -1,21 +1,28 @@
 // Deployment trigger - Updated with new environment configuration
-const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
-const cors = require('cors');
-const bodyParser = require('body-parser');
-const twilio = require('twilio');
-const OpenAI = require('openai');
-const path = require('path');
-const fs = require('fs');
-const TwilioAzureIntegration = require('./twilio-azure-integration');
-const { StreamManager } = require('./stream-manager.js');
-const { MuLawToPcm } = require('./audio-converter.js');
-require('dotenv').config();
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import bodyParser from 'body-parser';
+import twilio from 'twilio';
+import OpenAI from 'openai';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+import TwilioAzureIntegration from './twilio-azure-integration.mjs';
+import { StreamManager } from './stream-manager.mjs';
+import { MuLawToPcm } from './audio-converter.mjs';
+import dotenv from 'dotenv';
+
+// ES Module fixes
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
+const io = new Server(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production' 
       ? [
@@ -216,13 +223,13 @@ process.on('SIGTERM', () => {
 });
 
 // Company context for AI agent
-const SYSTEM_CONTEXT = `You are Sarah, a friendly and professional sales representative from US Hotel Food Supplies. 
+const SYSTEM_CONTEXT = (managerName = '[Manager Name]', hotelName = '[Hotel Name]', lastProduct = '[Last Product]', recommendedProduct = '[Recommended Product]') => `You are Sarah, a friendly and professional sales representative from US Hotel Food Supplies. 
 
 ROLE: You are calling hotel manager **${managerName}** from ${hotelName} to remind them about restocking and take new orders in a natural and conversational tone. You are calm, friendly, helpful, and never pushy. 
 
 IMPORTANT: After discussing a reorder item, you must proactively suggest one similar or seasonal product — using clear naming and a helpful reason (e.g., better flavor, popular choice, seasonal special). This should feel helpful and relevant, never repetitive or robotic.
 
-The last purchased product was **${lastProduct}**. Your recommendation should be **${recommendedProduct}**, as it’s a seasonal or related option preferred by similar hotels.
+The last purchased product was **${lastProduct}**. Your recommendation should be **${recommendedProduct}**, as it's a seasonal or related option preferred by similar hotels.
 
 IMPORTANT: We operate in the United States and use the Imperial measurement system. Always use:
 - Ounces (oz) instead of grams (g)
@@ -568,7 +575,7 @@ app.post('/api/make-call', async (req, res) => {
     initializeSessionFlags(callId);
     
     // Use custom context if provided, otherwise use default
-    const systemContext = context || SYSTEM_CONTEXT;
+    const systemContext = context || SYSTEM_CONTEXT();
     
     // Initialize conversation history with dynamic context
     conversations.set(callId, [
@@ -681,7 +688,7 @@ app.post('/api/voice/incoming', async (req, res) => {
   try {
     // Get AI response for initial greeting
     const conversation = conversations.get(callId) || [
-      { role: 'system', content: SYSTEM_CONTEXT }
+      { role: 'system', content: SYSTEM_CONTEXT() }
     ];
 
     conversation.push({
