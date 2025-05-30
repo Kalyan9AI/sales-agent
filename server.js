@@ -258,7 +258,7 @@ Start every call with *only* this sentence, exactly:
 📏 PRICING GUIDELINES (Imperial Units Only):
 - Bagels/Pastries: $23–27 per case (min 2)
 - Beverages (e.g., juice): $18–22 per case (min 3)
-- Coffee: $26–30 per case (min 2)
+- Coffee: $26–31 per case (min 2)
 - Dairy: $20–25 per case (min 2)
 - Condiments/Jams: $15–20 per case (min 2)
 - Bulk discount: 5+ cases = $2–3 off per case
