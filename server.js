@@ -538,7 +538,7 @@ app.post('/api/voice/incoming', async (req, res) => {
     });
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: "gpt-3.5-turbo",
       messages: conversation,
       max_tokens: 50,  // Reduced to force shorter responses
       temperature: 0.3,  // Reduced from 0.7 for more consistent responses
@@ -1594,7 +1594,7 @@ async function generateAIResponse(conversation, callId, hotel) {
     ];
     
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4',
+      model: 'gpt-3.5-turbo',
       messages: messages,
       temperature: 0.7,
       max_tokens: 150
