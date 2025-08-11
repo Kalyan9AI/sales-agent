@@ -89,6 +89,80 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Centralize OpenAI model selection with a safe default
+const DEFAULT_OPENAI_MODEL = (process.env.OPENAI_MODEL && process.env.OPENAI_MODEL.trim()) || 'gpt-5-nano';
+function getOpenAIModel() {
+  return DEFAULT_OPENAI_MODEL;
+}
+
+// Unified OpenAI chat helper with fallback to Responses API
+async function createOpenAIChat(messages, options = {}) {
+  const model = getOpenAIModel();
+  const { temperature, max_tokens } = options;
+
+  // Try Chat Completions first
+  try {
+    const completion = await openai.chat.completions.create({
+      model,
+      messages,
+      temperature,
+      max_tokens
+    });
+    const content = completion?.choices?.[0]?.message?.content;
+    if (typeof content === 'string' && content.length > 0) return content;
+  } catch (err) {
+    const message = err?.message || '';
+    const code = err?.code || '';
+    const shouldFallback =
+      /responses api/i.test(message) ||
+      /use the responses api/i.test(message) ||
+      /model_not_found/i.test(code) ||
+      /unsupported/i.test(message) ||
+      /invalid model/i.test(message);
+
+    if (!shouldFallback) {
+      throw err;
+    }
+  }
+
+  // Fallback to Responses API
+  const input = messages.map(m => ({
+    role: m.role,
+    content: [{ type: 'text', text: m.content }]
+  }));
+
+  const response = await openai.responses.create({
+    model,
+    input,
+    temperature,
+    // Try both names for compatibility across SDK versions
+    max_output_tokens: typeof max_tokens === 'number' ? max_tokens : undefined
+  });
+
+  // Try the convenient output_text first
+  if (typeof response?.output_text === 'string' && response.output_text.length > 0) {
+    return response.output_text;
+  }
+
+  // Fallback parse of structured output
+  try {
+    const blocks = response?.output || response?.choices || [];
+    for (const block of blocks) {
+      const content = block?.content || block?.message?.content || [];
+      const parts = Array.isArray(content) ? content : [{ type: 'text', text: String(content || '') }];
+      for (const part of parts) {
+        if (part?.type === 'text' && typeof part?.text === 'string' && part.text.length > 0) {
+          return part.text;
+        }
+      }
+    }
+  } catch (_) {
+    // ignore parse errors below
+  }
+
+  throw new Error('OpenAI returned no text content');
+}
+
 // Initialize Azure integration
 let azureIntegration;
 try {
@@ -438,12 +512,10 @@ async function prewarmServices() {
   
   try {
     // Prewarm GPT with a lightweight prompt
-    const gptPrewarm = openai.chat.completions.create({
-      model: "gpt-5-nano",
-      messages: [{ role: 'user', content: 'Say a brief hello.' }],
-      max_tokens: 20,
-      temperature: 0.3
-    }).catch(error => {
+    const gptPrewarm = createOpenAIChat(
+      [{ role: 'user', content: 'Say a brief hello.' }],
+      { max_tokens: 20, temperature: 0.3 }
+    ).catch(error => {
       console.log('GPT prewarm non-critical error:', error.message);
     });
 
@@ -650,14 +722,10 @@ app.post('/api/voice/incoming', async (req, res) => {
       content: 'The call just connected. Say EXACTLY this greeting and nothing more: "Hi, I am Sarah calling from US Hotel Food Supplies, customer sales department. Can I know if I am speaking with the manager [manager name]?" - Replace [manager name] with the actual manager name. Use only this format, do not add any other questions or sentences.'
     });
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5-nano",
-      messages: conversation,
-      max_tokens: 50,  // Keeping reduced tokens for shorter responses
-      temperature: 0.3,  // Keeping reduced temperature for consistent responses
+    const aiResponse = await createOpenAIChat(conversation, {
+      max_tokens: 50,
+      temperature: 0.3
     });
-
-    let aiResponse = completion.choices[0].message.content;
     
     conversation.push({ role: 'assistant', content: aiResponse });
     conversations.set(callId, conversation);
@@ -1469,14 +1537,10 @@ Please use this information to personalize the conversation and make relevant pr
       ...conversation.slice(-3) // Last 3 messages for context
     ];
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-5-nano',
-      messages: trimmedConversation,
+    const response = await createOpenAIChat(trimmedConversation, {
       temperature: 0.5,
       max_tokens: 100
     });
-
-    const response = completion.choices[0].message.content;
 
     // Update recommended products if AI suggests something new
     const productMatches = response.match(/would you like to try our ([\w\s]+)|\b(bagels?|croissants?|yogurt|jam|coffee|water)\b/gi);
@@ -1523,23 +1587,19 @@ app.post('/api/analyze-call', async (req, res) => {
     
     console.log(`🔍 Analyzing call ${callId} with AI...`);
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5-nano",
-      messages: [
-        {
-          role: "system",
-          content: "You are an expert sales call analyzer. Analyze the conversation and provide detailed insights in the exact JSON format requested. Focus on extracting actual order details, customer sentiment, and actionable recommendations."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
+    const analysisText = await createOpenAIChat([
+      {
+        role: "system",
+        content: "You are an expert sales call analyzer. Analyze the conversation and provide detailed insights in the exact JSON format requested. Focus on extracting actual order details, customer sentiment, and actionable recommendations."
+      },
+      {
+        role: "user",
+        content: prompt
+      }
+    ], {
       temperature: 0.3,
-      max_tokens: 1000  // Reduced from 2000 as gpt-5-nano can be more concise
+      max_tokens: 1000  // Reduced from 2000 as smaller models are typically more concise
     });
-
-    const analysisText = completion.choices[0].message.content;
     console.log(`🤖 Raw AI analysis: ${analysisText}`);
     
     // Parse the JSON response
@@ -1647,14 +1707,10 @@ app.post('/api/test/latency', async (req, res) => {
   try {
     // Test OpenAI latency
     const openaiStart = Date.now();
-    const completion = await openai.chat.completions.create({
-      model: "gpt-5-nano",
-      messages: [
-        { role: "system", content: "You are a helpful assistant." },
-        { role: "user", content: "Say hello briefly." }
-      ],
-      max_tokens: 20  // Reduced from 50 as it's just a test greeting
-    });
+    await createOpenAIChat([
+      { role: "system", content: "You are a helpful assistant." },
+      { role: "user", content: "Say hello briefly." }
+    ], { max_tokens: 20 });
     const openaiDuration = Date.now() - openaiStart;
     logPerformance('openai', 'test_completion', openaiDuration);
 
@@ -1854,6 +1910,7 @@ server.listen(PORT, async () => {
   console.log(`🚀 Voice Agent Server running on port ${PORT}`);
   console.log(`📞 Twilio configured: ${!!process.env.TWILIO_ACCOUNT_SID}`);
   console.log(`🤖 OpenAI configured: ${!!process.env.OPENAI_API_KEY}`);
+  console.log(`🧠 OpenAI model: ${getOpenAIModel()}`);
   console.log(`🎙️ Azure Speech Services configured: ${!!azureIntegration}`);
   if (azureIntegration) {
     console.log(`🔊 Azure custom voice: ${process.env.AZURE_CUSTOM_VOICE_NAME || 'luna'}`);
