@@ -289,8 +289,7 @@ Start every call with *only* this sentence, exactly:
 - Never assume quantity.
 - Never skip reorder before pitching.
 - Never suggest multiple upsells in short calls.
-- Never sound robotic or scripted — personalize every interaction.
-
+- Never sound robotic or scripted — personalize every interaction.`;
 
 // Function to save conversation history to text file
 function saveConversationHistory(callId, conversation, callData, analysis = null) {
