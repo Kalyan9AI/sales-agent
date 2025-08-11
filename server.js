@@ -440,7 +440,7 @@ async function prewarmServices() {
   try {
     // Prewarm GPT with a lightweight prompt
     const gptPrewarm = openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-5-nano",
       messages: [{ role: 'user', content: 'Say a brief hello.' }],
       max_tokens: 20,
       temperature: 0.3
@@ -652,7 +652,7 @@ app.post('/api/voice/incoming', async (req, res) => {
     });
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-5-nano",
       messages: conversation,
       max_tokens: 50,  // Keeping reduced tokens for shorter responses
       temperature: 0.3,  // Keeping reduced temperature for consistent responses
@@ -1471,7 +1471,7 @@ Please use this information to personalize the conversation and make relevant pr
     ];
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: 'gpt-5-nano',
       messages: trimmedConversation,
       temperature: 0.5,
       max_tokens: 100
@@ -1525,7 +1525,7 @@ app.post('/api/analyze-call', async (req, res) => {
     console.log(`🔍 Analyzing call ${callId} with AI...`);
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-5-nano",
       messages: [
         {
           role: "system",
@@ -1537,7 +1537,7 @@ app.post('/api/analyze-call', async (req, res) => {
         }
       ],
       temperature: 0.3,
-      max_tokens: 1000  // Reduced from 2000 as GPT-3.5-turbo can be more concise
+      max_tokens: 1000  // Reduced from 2000 as gpt-5-nano can be more concise
     });
 
     const analysisText = completion.choices[0].message.content;
@@ -1649,7 +1649,7 @@ app.post('/api/test/latency', async (req, res) => {
     // Test OpenAI latency
     const openaiStart = Date.now();
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-5-nano",
       messages: [
         { role: "system", content: "You are a helpful assistant." },
         { role: "user", content: "Say hello briefly." }
