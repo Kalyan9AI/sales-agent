@@ -8,6 +8,7 @@ on:
     branches:
       - main
       - fix-from-working-version
+      - restore-working-version-ab1701b
   workflow_dispatch:
 
 jobs:
@@ -42,7 +43,7 @@ jobs:
           zip -r deploy.zip . -x "client/*" ".git/*" "*.log" "temp_audio/*" "conversation_history/*"
 
       - name: 'Deploy to Azure Web App'
-        uses: azure/webapps-deploy@v3
+        uses: azure/webapps-deploy@v2
         with:
           app-name: 'sales-agent'
           slot-name: 'Production'
