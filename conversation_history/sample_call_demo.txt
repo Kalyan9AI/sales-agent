@@ -5,7 +5,7 @@ Call ID: call_demo_sample
 Date: 5/26/2024, 7:07:30 PM
 Duration: 3:45
 Phone Number: +19253252609
-Hotel: Grand Plaza Hotel
+Hotel: Hilton Downtown Hotel
 Manager: John Doe
 Status: completed
 ================================================================================
