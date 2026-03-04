@@ -9,8 +9,8 @@ class AzureSpeechService {
     this.customVoiceName = process.env.AZURE_CUSTOM_VOICE_NAME || 'luna';
     
     // Retry configuration
-    this.MAX_RETRIES = 3;
-    this.RETRY_DELAY = 1000; // 1 second
+    this.MAX_RETRIES = 2;
+    this.RETRY_DELAY = 200; // 1 second
     
     if (!this.speechKey || !this.speechRegion) {
       throw new Error('Azure Speech key and region must be set in environment variables');
@@ -23,10 +23,10 @@ class AzureSpeechService {
     this.speechConfig.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3;
     
     // Configure timeouts and retries
-    this.speechConfig.setProperty("SpeechServiceConnection_InitialSilenceTimeoutMs", "10000"); // 10 seconds
-    this.speechConfig.setProperty("SpeechServiceConnection_EndSilenceTimeoutMs", "5000"); // 5 seconds
-    this.speechConfig.setProperty("SpeechServiceConnection_ReconnectionBackoffMs", "1000"); // 1 second
-    this.speechConfig.setProperty("SpeechServiceConnection_MaxRetryTimeMs", "15000"); // 15 seconds max retry
+    this.speechConfig.setProperty("SpeechServiceConnection_InitialSilenceTimeoutMs", "2000"); // 10 seconds
+    this.speechConfig.setProperty("SpeechServiceConnection_EndSilenceTimeoutMs", "500"); // 5 seconds
+    this.speechConfig.setProperty("SpeechServiceConnection_ReconnectionBackoffMs", "200"); // 1 second
+    this.speechConfig.setProperty("SpeechServiceConnection_MaxRetryTimeMs", "3000"); // 15 seconds max retry
     
     console.log(`🎙️ Azure Speech Service initialized with voice: ${this.speechConfig.speechSynthesisVoiceName}`);
     console.log(`🔊 Audio format: Audio16Khz32KBitRateMonoMp3 for optimal Luna voice quality`);
