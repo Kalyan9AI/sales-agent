@@ -23,8 +23,8 @@ class AzureSpeechService {
     this.speechConfig.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3;
     
     // Configure timeouts and retries
-    this.speechConfig.setProperty("SpeechServiceConnection_InitialSilenceTimeoutMs", "2000"); // 10 seconds
-    this.speechConfig.setProperty("SpeechServiceConnection_EndSilenceTimeoutMs", "500"); // 5 seconds
+    this.speechConfig.setProperty("SpeechServiceConnection_InitialSilenceTimeoutMs", "8000"); // 10 seconds
+    this.speechConfig.setProperty("SpeechServiceConnection_EndSilenceTimeoutMs", "3000"); // 5 seconds
     this.speechConfig.setProperty("SpeechServiceConnection_ReconnectionBackoffMs", "200"); // 1 second
     this.speechConfig.setProperty("SpeechServiceConnection_MaxRetryTimeMs", "3000"); // 15 seconds max retry
     
